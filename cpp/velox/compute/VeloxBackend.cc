@@ -201,6 +201,13 @@ void VeloxBackend::init(
         "velox_vector_hasher_value_id_prefetch_distance", std::to_string(distance).c_str());
   }
 
+  std::string mightContainShareFilters;
+  if (gflags::GetCommandLineOption("velox_might_contain_share_filters", &mightContainShareFilters)) {
+    gflags::SetCommandLineOption(
+        "velox_might_contain_share_filters",
+        backendConf_->get<bool>(kMightContainShareFilters, false) ? "true" : "false");
+  }
+
   std::string mightContainMemo;
   if (gflags::GetCommandLineOption("velox_might_contain_memo", &mightContainMemo)) {
     gflags::SetCommandLineOption(

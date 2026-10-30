@@ -53,6 +53,10 @@ const std::string kVectorHasherValueIdPrefetchDistance =
 // Application-static. Lets a batched might_contain answer repeated input values from a small table of
 // earlier results instead of the Bloom filter; results are unchanged.
 const std::string kMightContainMemoEnabled = "spark.gluten.sql.columnar.backend.velox.mightContain.memo.enabled";
+
+// Application-static. Lets batched might_contain functions of all tasks in an executor probe one shared
+// copy of an identical runtime Bloom filter; results are unchanged.
+const std::string kMightContainShareFilters = "spark.gluten.sql.columnar.backend.velox.mightContain.shareFilters.enabled";
 // memory
 const std::string kSpillStrategy = "spark.gluten.sql.columnar.backend.velox.spillStrategy";
 const std::string kSpillStrategyDefaultValue = "auto";
