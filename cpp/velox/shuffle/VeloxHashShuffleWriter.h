@@ -38,6 +38,7 @@
 #include <arrow/type.h>
 
 #include "VeloxShuffleWriter.h"
+#include "memory/VeloxColumnarBatch.h"
 #include "memory/VeloxMemoryManager.h"
 #include "shuffle/FixedWidthGather.h"
 #include "shuffle/PartitionWriter.h"
@@ -302,6 +303,10 @@ class VeloxHashShuffleWriter : public VeloxShuffleWriter {
 
   arrow::Status splitRowVector(const facebook::velox::RowVector& rv);
 
+  // Returns the batch with every column flat except fixed-width dictionary columns without nulls over
+  // a flat base, which splitFixedWidthValueBuffer gathers through their indices.
+  facebook::velox::RowVectorPtr flattenExceptFixedWidthDictionaries(VeloxColumnarBatch& batch);
+
   arrow::Status initFromRowVector(const facebook::velox::RowVector& rv);
 
   arrow::Status buildPartition2Row(uint32_t rowNum);
@@ -364,7 +369,7 @@ class VeloxHashShuffleWriter : public VeloxShuffleWriter {
       auto pos = partition2RowOffsetBase_[pid];
       auto end = partition2RowOffsetBase_[pid + 1];
       detail::gatherFixedWidth(
-          reinterpret_cast<const T*>(srcAddr), rowOffset2RowId_.data() + pos, end - pos, dstPidBase, enableSveGather_);
+          reinterpret_cast<const T*>(srcAddr), splitRowIds_ + pos, end - pos, dstPidBase, enableSveGather_);
     }
     return arrow::Status::OK();
   }
@@ -503,6 +508,13 @@ class VeloxHashShuffleWriter : public VeloxShuffleWriter {
   // value: The index of row in the current input RowVector
   // Updated for each input RowVector.
   std::vector<uint32_t> rowOffset2RowId_;
+
+  // Row ids splitFixedType gathers from: rowOffset2RowId_, or for a dictionary-encoded column the
+  // same ids mapped through its indices into the flat base vector.
+  const uint32_t* splitRowIds_{nullptr};
+
+  // rowOffset2RowId_ mapped through the indices of the dictionary column being split.
+  std::vector<uint32_t> translatedRowIds_;
 
   // Partition buffers are used for holding the intermediate data during split.
   // Partition ID -> Partition buffer size(unit is row)

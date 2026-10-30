@@ -307,7 +307,7 @@ arrow::Status VeloxHashShuffleWriter::write(std::shared_ptr<ColumnarBatch> cb, i
     facebook::velox::RowVectorPtr rv;
     {
       SCOPED_TIMER(cpuWallTimingList_[CpuWallTimingFlattenRV]);
-      rv = veloxColumnBatch->getFlattenedRowVector();
+      rv = flattenExceptFixedWidthDictionaries(*veloxColumnBatch);
     }
     if (isExtremelyLargeBatch(rv)) {
       auto numRows = rv->size();
@@ -324,6 +324,60 @@ arrow::Status VeloxHashShuffleWriter::write(std::shared_ptr<ColumnarBatch> cb, i
     }
   }
   return arrow::Status::OK();
+}
+
+namespace {
+
+// A fixed-width column the split can gather through its dictionary indices: a dictionary without
+// nulls over a flat base without nulls. Booleans (bit-packed) and timestamps keep the flatten path.
+bool isGatherableDictionary(const facebook::velox::VectorPtr& vector) {
+  using facebook::velox::TypeKind;
+  if (vector->encoding() != facebook::velox::VectorEncoding::Simple::DICTIONARY || vector->rawNulls() != nullptr) {
+    return false;
+  }
+  // A lazily loaded column keeps its LazyVector between the dictionary and the loaded flat values.
+  const auto* base = vector->valueVector() == nullptr ? nullptr : vector->valueVector()->loadedVector();
+  if (base == nullptr || base->encoding() != facebook::velox::VectorEncoding::Simple::FLAT || base->mayHaveNulls()) {
+    return false;
+  }
+  switch (vector->typeKind()) {
+    case TypeKind::TINYINT:
+    case TypeKind::SMALLINT:
+    case TypeKind::INTEGER:
+    case TypeKind::BIGINT:
+    case TypeKind::REAL:
+    case TypeKind::DOUBLE:
+      return true;
+    default:
+      return false;
+  }
+}
+
+} // namespace
+
+facebook::velox::RowVectorPtr VeloxHashShuffleWriter::flattenExceptFixedWidthDictionaries(VeloxColumnarBatch& batch) {
+  auto rv = batch.getRowVector();
+  std::vector<facebook::velox::VectorPtr> children;
+  children.reserve(rv->childrenSize());
+  bool kept = false;
+  for (auto i = 0; i < rv->childrenSize(); ++i) {
+    auto child = facebook::velox::BaseVector::loadedVectorShared(rv->childAt(i));
+    if (child->size() > rv->size()) {
+      child = child->slice(0, rv->size());
+    }
+    // The partition id column must stay flat for the partitioner.
+    if (!(i == 0 && partitioner_->hasPid()) && isGatherableDictionary(child)) {
+      kept = true;
+    } else {
+      facebook::velox::BaseVector::flattenVector(child);
+    }
+    children.push_back(std::move(child));
+  }
+  if (!kept) {
+    return batch.getFlattenedRowVector();
+  }
+  return std::make_shared<facebook::velox::RowVector>(
+      rv->pool(), rv->type(), rv->nulls(), rv->size(), std::move(children));
 }
 
 arrow::Status VeloxHashShuffleWriter::partitioningAndDoSplit(facebook::velox::RowVectorPtr rv, int64_t memLimit) {
@@ -517,10 +571,27 @@ arrow::Status VeloxHashShuffleWriter::splitRowVector(const facebook::velox::RowV
 }
 
 arrow::Status VeloxHashShuffleWriter::splitFixedWidthValueBuffer(const facebook::velox::RowVector& rv) {
+  // Columns wrapped by the same filter share one indices buffer; translate the row ids once per buffer.
+  const facebook::velox::vector_size_t* translatedIndices = nullptr;
   for (auto col = 0; col < fixedWidthColumnCount_; ++col) {
     auto colIdx = simpleColumnIndices_[col];
     auto& column = rv.childAt(colIdx);
-    const uint8_t* srcAddr = (const uint8_t*)column->valuesAsVoid();
+    const uint8_t* srcAddr;
+    splitRowIds_ = rowOffset2RowId_.data();
+    if (column->encoding() == facebook::velox::VectorEncoding::Simple::DICTIONARY) {
+      const auto* indices = column->wrapInfo()->as<facebook::velox::vector_size_t>();
+      if (indices != translatedIndices) {
+        translatedRowIds_.resize(rowOffset2RowId_.size());
+        for (size_t i = 0; i < rowOffset2RowId_.size(); ++i) {
+          translatedRowIds_[i] = indices[rowOffset2RowId_[i]];
+        }
+        translatedIndices = indices;
+      }
+      splitRowIds_ = translatedRowIds_.data();
+      srcAddr = (const uint8_t*)column->valueVector()->loadedVector()->valuesAsVoid();
+    } else {
+      srcAddr = (const uint8_t*)column->valuesAsVoid();
+    }
     const auto& dstAddrs = partitionFixedWidthValueAddrs_[col];
 
     switch (arrow::bit_width(arrowColumnTypes_[colIdx]->id())) {
