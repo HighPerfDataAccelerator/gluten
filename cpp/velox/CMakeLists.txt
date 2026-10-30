@@ -273,6 +273,12 @@ if(ENABLE_GLUTEN_VCPKG AND NOT CMAKE_SYSTEM_NAME MATCHES "Darwin")
   target_link_options(
     velox PRIVATE -Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/symbols.map)
 endif()
+if(CMAKE_SYSTEM_NAME MATCHES "Linux")
+  # Bind calls between functions defined in libvelox.so directly instead of
+  # through the PLT. Velox is linked in statically and nothing interposes its
+  # functions; hot per-row helpers otherwise pay a PLT stub on every call.
+  target_link_options(velox PRIVATE -Wl,-Bsymbolic-functions)
+endif()
 if(CMAKE_SYSTEM_NAME MATCHES "Darwin")
   # Make libvelox.dylib own the Velox mono archive. Test utilities can then
   # resolve Velox symbols from the dylib instead of linking a second copy.
