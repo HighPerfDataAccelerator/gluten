@@ -59,6 +59,20 @@ class FForCodec {
   // of sizeof(__int128_t); returns the number of 128-bit values decoded.
   static arrow::Result<int64_t>
   decompress128(const uint8_t* input, int64_t inputSize, uint8_t* output, int64_t outputSize);
+
+  // Worst-case compressed size for a stream of 32-bit values.
+  // inputSize must be a multiple of 4; returns 0 otherwise.
+  static int64_t maxCompressedLength32(int64_t inputSize);
+
+  // Compress a stream of 32-bit values (INTEGER, DATE, REAL bit patterns).
+  // Returns the number of compressed bytes written to output.
+  static arrow::Result<int64_t>
+  compress32(const uint8_t* input, int64_t inputSize, uint8_t* output, int64_t outputSize);
+
+  // Decompress data produced by compress32(). outputSize must be a multiple
+  // of 4; returns the number of 32-bit values decoded.
+  static arrow::Result<int64_t>
+  decompress32(const uint8_t* input, int64_t inputSize, uint8_t* output, int64_t outputSize);
 };
 
 } // namespace gluten

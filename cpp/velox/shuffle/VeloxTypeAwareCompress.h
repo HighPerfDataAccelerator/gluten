@@ -30,6 +30,8 @@ inline int8_t veloxTypeToTacType(facebook::velox::TypeKind kind) {
       return tac::kUInt64;
     case facebook::velox::TypeKind::HUGEINT:
       return tac::kUInt128;
+    case facebook::velox::TypeKind::INTEGER:
+      return tac::kUInt32;
     default:
       return tac::kUnsupported;
   }

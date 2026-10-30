@@ -693,5 +693,96 @@ inline size_t decompress128(const uint8_t* input, size_t inputSize, uint8_t* out
   return decompress128Impl<false, false>(input, inputSize, output, outputSize);
 }
 
+// =============================================================================
+// 32-bit codec.
+//
+// Each block of 32-bit values is zero-extended into a 64-bit scratch and run
+// through the 64-bit block encoder, so the wire format is that of
+// compress64 with a tail block carrying the remaining values as raw 32-bit
+// words.  Signed values with negatives get a 32-bit frame, which still
+// round-trips because only the low 32 bits are written back.
+// =============================================================================
+
+inline constexpr size_t compress32Bound(size_t numValues) {
+  size_t nBlocks = (numValues + kMaxValuesPerBlock - 1) / kMaxValuesPerBlock;
+  // A block rounds each lane up to a whole word.
+  return (nBlocks + 1) * (kHeaderSize + kLanes * sizeof(uint64_t)) + numValues * sizeof(uint32_t);
+}
+
+inline size_t compress32(const uint8_t* input, size_t numValues, uint8_t* output) {
+  alignas(64) uint32_t narrow[kMaxValuesPerBlock];
+  alignas(64) uint64_t wide[kMaxValuesPerBlock];
+  alignas(64) uint64_t tmpOut[kMaxValuesPerBlock + 2];
+
+  uint8_t* outPtr = output;
+  size_t remaining = numValues;
+  const uint8_t* inPtr = input;
+  while (remaining >= kLanes) {
+    size_t blockVals = remaining - (remaining % kLanes);
+    if (blockVals > kMaxValuesPerBlock) {
+      blockVals = kMaxValuesPerBlock;
+    }
+    std::memcpy(narrow, inPtr, blockVals * sizeof(uint32_t));
+    for (size_t i = 0; i < blockVals; ++i) {
+      wide[i] = narrow[i];
+    }
+    const size_t produced = encodeBlock(wide, blockVals, tmpOut);
+    std::memcpy(outPtr, tmpOut, produced);
+    outPtr += produced;
+    inPtr += blockVals * sizeof(uint32_t);
+    remaining -= blockVals;
+  }
+
+  writeHeader(outPtr, kBwTailMarker, static_cast<uint8_t>(remaining), 0);
+  outPtr += kHeaderSize;
+  if (remaining > 0) {
+    std::memcpy(outPtr, inPtr, remaining * sizeof(uint32_t));
+    outPtr += remaining * sizeof(uint32_t);
+  }
+  return static_cast<size_t>(outPtr - output);
+}
+
+inline size_t decompress32(const uint8_t* input, size_t inputSize, uint8_t* output, size_t outputSize) {
+  alignas(64) uint64_t tmpIn[kMaxValuesPerBlock + 2];
+  alignas(64) uint64_t wide[kMaxValuesPerBlock];
+  alignas(64) uint32_t narrow[kMaxValuesPerBlock];
+
+  const uint8_t* inPtr = input;
+  const uint8_t* inEnd = input + inputSize;
+  const size_t outValuesMax = outputSize / sizeof(uint32_t);
+  size_t nDecoded = 0;
+  while (inPtr + kHeaderSize <= inEnd) {
+    if (inPtr[0] == kBwTailMarker) {
+      const uint8_t count = inPtr[1];
+      inPtr += kHeaderSize;
+      const size_t tailBytes = static_cast<size_t>(count) * sizeof(uint32_t);
+      if (inPtr + tailBytes > inEnd || count > outValuesMax - nDecoded) {
+        break;
+      }
+      std::memcpy(output + nDecoded * sizeof(uint32_t), inPtr, tailBytes);
+      nDecoded += count;
+      break;
+    }
+    const size_t blockVals = static_cast<size_t>(inPtr[1]) * kLanes;
+    if (blockVals == 0 || blockVals > kMaxValuesPerBlock || blockVals > outValuesMax - nDecoded) {
+      break;
+    }
+    const size_t remaining = static_cast<size_t>(inEnd - inPtr);
+    const size_t n = std::min(remaining, sizeof(tmpIn));
+    std::memcpy(tmpIn, inPtr, n);
+    const size_t consumed = decodeBlock(tmpIn, n, blockVals, wide);
+    if (consumed == 0) {
+      break;
+    }
+    inPtr += consumed;
+    for (size_t i = 0; i < blockVals; ++i) {
+      narrow[i] = static_cast<uint32_t>(wide[i]);
+    }
+    std::memcpy(output + nDecoded * sizeof(uint32_t), narrow, blockVals * sizeof(uint32_t));
+    nDecoded += blockVals;
+  }
+  return nDecoded;
+}
+
 } // namespace ffor
 } // namespace gluten

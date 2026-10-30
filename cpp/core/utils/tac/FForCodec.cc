@@ -102,4 +102,39 @@ FForCodec::decompress128(const uint8_t* input, int64_t inputSize, uint8_t* outpu
   return static_cast<int64_t>(nDecoded);
 }
 
+int64_t FForCodec::maxCompressedLength32(int64_t inputSize) {
+  if (inputSize % sizeof(uint32_t) != 0) {
+    return 0;
+  }
+  return static_cast<int64_t>(ffor::compress32Bound(inputSize / sizeof(uint32_t)));
+}
+
+arrow::Result<int64_t>
+FForCodec::compress32(const uint8_t* input, int64_t inputSize, uint8_t* output, int64_t outputSize) {
+  if (inputSize == 0) {
+    return 0;
+  }
+  if (inputSize % sizeof(uint32_t) != 0) {
+    return arrow::Status::Invalid("FForCodec: input size ", inputSize, " is not a multiple of 4.");
+  }
+  size_t numValues = inputSize / sizeof(uint32_t);
+  auto maxLen = static_cast<int64_t>(ffor::compress32Bound(numValues));
+  if (outputSize < maxLen) {
+    return arrow::Status::Invalid(
+        "FForCodec: output buffer too small for 32-bit compression (need ", maxLen, " bytes, got ", outputSize, ").");
+  }
+  return static_cast<int64_t>(ffor::compress32(input, numValues, output));
+}
+
+arrow::Result<int64_t>
+FForCodec::decompress32(const uint8_t* input, int64_t inputSize, uint8_t* output, int64_t outputSize) {
+  if (outputSize == 0) {
+    return 0;
+  }
+  if (outputSize % sizeof(uint32_t) != 0) {
+    return arrow::Status::Invalid("FForCodec: output size ", outputSize, " is not a multiple of 4.");
+  }
+  return static_cast<int64_t>(ffor::decompress32(input, inputSize, output, static_cast<size_t>(outputSize)));
+}
+
 } // namespace gluten

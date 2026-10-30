@@ -21,7 +21,7 @@
 namespace gluten {
 
 bool TypeAwareCompressCodec::support(int8_t tacType) {
-  return tacType == tac::kUInt64 || tacType == tac::kUInt128;
+  return tacType == tac::kUInt64 || tacType == tac::kUInt128 || tacType == tac::kUInt32;
 }
 
 int64_t TypeAwareCompressCodec::maxCompressedLen(int64_t inputLen, int8_t tacType) {
@@ -30,6 +30,8 @@ int64_t TypeAwareCompressCodec::maxCompressedLen(int64_t inputLen, int8_t tacTyp
       return kPayloadHeaderSize + FForCodec::maxCompressedLength(inputLen);
     case tac::kUInt128:
       return kPayloadHeaderSize + FForCodec::maxCompressedLength128(inputLen);
+    case tac::kUInt32:
+      return kPayloadHeaderSize + FForCodec::maxCompressedLength32(inputLen);
     default:
       return 0;
   }
@@ -64,6 +66,10 @@ arrow::Result<int64_t> TypeAwareCompressCodec::compress(
     }
     case tac::kUInt128: {
       ARROW_ASSIGN_OR_RAISE(compressedLen, FForCodec::compress128(input, inputLen, out, availableOutput));
+      break;
+    }
+    case tac::kUInt32: {
+      ARROW_ASSIGN_OR_RAISE(compressedLen, FForCodec::compress32(input, inputLen, out, availableOutput));
       break;
     }
     default:
@@ -104,6 +110,12 @@ TypeAwareCompressCodec::decompress(const uint8_t* input, int64_t inputLen, uint8
       ARROW_ASSIGN_OR_RAISE(nDecoded, FForCodec::decompress128(in, dataLen, output, outputLen));
       valueSize = 2 * sizeof(uint64_t);
       typeName = "uint128";
+      break;
+    }
+    case tac::kUInt32: {
+      ARROW_ASSIGN_OR_RAISE(nDecoded, FForCodec::decompress32(in, dataLen, output, outputLen));
+      valueSize = sizeof(uint32_t);
+      typeName = "uint32";
       break;
     }
     default:
