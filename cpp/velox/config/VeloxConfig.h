@@ -49,6 +49,10 @@ const std::string kArmHashTablePrefetchDistance = "spark.gluten.sql.columnar.bac
 // Rows of look-ahead for prefetching VectorHasher distinct-value table chunks; zero disables it.
 const std::string kVectorHasherValueIdPrefetchDistance =
     "spark.gluten.sql.columnar.backend.velox.vectorHasher.valueIdPrefetchDistance";
+
+// Application-static. Lets a batched might_contain answer repeated input values from a small table of
+// earlier results instead of the Bloom filter; results are unchanged.
+const std::string kMightContainMemoEnabled = "spark.gluten.sql.columnar.backend.velox.mightContain.memo.enabled";
 // memory
 const std::string kSpillStrategy = "spark.gluten.sql.columnar.backend.velox.spillStrategy";
 const std::string kSpillStrategyDefaultValue = "auto";

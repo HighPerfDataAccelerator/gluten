@@ -201,6 +201,12 @@ void VeloxBackend::init(
         "velox_vector_hasher_value_id_prefetch_distance", std::to_string(distance).c_str());
   }
 
+  std::string mightContainMemo;
+  if (gflags::GetCommandLineOption("velox_might_contain_memo", &mightContainMemo)) {
+    gflags::SetCommandLineOption(
+        "velox_might_contain_memo", backendConf_->get<bool>(kMightContainMemoEnabled, false) ? "true" : "false");
+  }
+
   // Application-static: never mutate this flag from a task/query config.
   // This application-static option is present only in Velox branches with
   // batched string extraction. Set it by name when that feature is registered.
