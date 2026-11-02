@@ -641,9 +641,9 @@ std::unordered_map<std::string, std::string> WholeStageResultIterator::getQueryC
 
     // hashtable build optimizations
     configs[velox::core::QueryConfig::kAbandonDedupHashMapMinRows] =
-        std::to_string(veloxCfg_->get<int32_t>(kAbandonDedupHashMapMinRows, 100000));
+        std::to_string(veloxCfg_->get<int32_t>(kAbandonDedupHashMapMinRows, kAbandonDedupHashMapMinRowsDefault));
     configs[velox::core::QueryConfig::kAbandonDedupHashMapMinPct] =
-        std::to_string(veloxCfg_->get<int32_t>(kAbandonDedupHashMapMinPct, 0));
+        std::to_string(veloxCfg_->get<int32_t>(kAbandonDedupHashMapMinPct, kAbandonDedupHashMapMinPctDefault));
 
     // Disable driver cpu time slicing.
     configs[velox::core::QueryConfig::kDriverCpuTimeSliceLimitMs] = "0";

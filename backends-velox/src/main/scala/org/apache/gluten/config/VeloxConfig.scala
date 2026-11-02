@@ -821,9 +821,9 @@ object VeloxConfig extends ConfigRegistry {
       .experimental()
       .doc(
         "Experimental: abandon hashmap build if duplicated rows are more than this percentile. " +
-          "Value is integer based and range is [0, 100].")
+          "Value is integer based and range is [0, 100]. 0 disables build-side dedup.")
       .intConf
-      .createWithDefault(0)
+      .createWithDefault(50)
 
   val VELOX_BROADCAST_BUILD_HASHTABLE_ONCE_PER_EXECUTOR =
     buildConf("spark.gluten.velox.buildHashTableOncePerExecutor.enabled")
