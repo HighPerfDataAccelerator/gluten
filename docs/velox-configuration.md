@@ -108,7 +108,7 @@ nav_order: 16
 
 |                           Key                            | Modifiability | Default |                                                               Description                                                               |
 |----------------------------------------------------------|---------------|---------|-----------------------------------------------------------------------------------------------------------------------------------------|
-| spark.gluten.velox.abandonDedupHashMap.minPct            | 🔄 Dynamic    | 0       | Experimental: abandon hashmap build if duplicated rows are more than this percentile. Value is integer based and range is [0, 100].     |
+| spark.gluten.velox.abandonDedupHashMap.minPct            | 🔄 Dynamic    | 80      | Experimental: abandon hashmap build if duplicated rows are more than this percentile. Value is integer based and range is [0, 100].     |
 | spark.gluten.velox.abandonDedupHashMap.minRows           | 🔄 Dynamic    | 100000  | Experimental: abandon hashmap build if duplicated rows more than this number.                                                           |
 | spark.gluten.velox.joinBuildVectorHasherMaxNumDistinct   | 🔄 Dynamic    | 1000000 | Experimental: maximum number of distinct values to keep when merging vector hashers in join HashBuild.                                  |
 | spark.gluten.velox.minTableRowsForParallelJoinBuild      | 🔄 Dynamic    | 1000    | Experimental: the minimum number of table rows that can trigger the parallel hash join table build.                                     |

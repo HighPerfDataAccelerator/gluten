@@ -78,7 +78,7 @@ const uint32_t kJoinBuildVectorHasherMaxNumDistinctDefault = 1'000'000;
 const std::string kAbandonDedupHashMapMinRows = "spark.gluten.velox.abandonDedupHashMap.minRows";
 const uint32_t kAbandonDedupHashMapMinRowsDefault = 100'000;
 const std::string kAbandonDedupHashMapMinPct = "spark.gluten.velox.abandonDedupHashMap.minPct";
-const uint32_t kAbandonDedupHashMapMinPctDefault = 0;
+const uint32_t kAbandonDedupHashMapMinPctDefault = 80;
 
 // execution
 const std::string kSparkBloomFilterExpectedNumItems = "spark.sql.optimizer.runtime.bloomFilter.expectedNumItems";
