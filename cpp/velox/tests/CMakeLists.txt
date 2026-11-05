@@ -112,6 +112,11 @@ target_include_directories(arm_shuffle_kernel_test
 target_link_libraries(arm_shuffle_kernel_test PRIVATE GTest::gtest_main)
 gtest_discover_tests(arm_shuffle_kernel_test DISCOVERY_MODE PRE_TEST)
 
+add_executable(folly_concurrent_hash_map_test FollyConcurrentHashMapTest.cc)
+target_link_libraries(folly_concurrent_hash_map_test PRIVATE Folly::folly
+                                                           GTest::gtest_main)
+gtest_discover_tests(folly_concurrent_hash_map_test DISCOVERY_MODE PRE_TEST)
+
 add_velox_test(round_initialization_test SOURCES RoundInitializationTest.cc)
 
 add_velox_test(velox_shuffle_writer_test SOURCES VeloxShuffleWriterTest.cc)
