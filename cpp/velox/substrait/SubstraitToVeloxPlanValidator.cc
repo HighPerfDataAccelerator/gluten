@@ -1091,6 +1091,19 @@ bool SubstraitToVeloxPlanValidator::validate(const ::substrait::JoinRel& joinRel
     case ::substrait::JoinRel_JoinType_JOIN_TYPE_RIGHT_SEMI:
     case ::substrait::JoinRel_JoinType_JOIN_TYPE_LEFT_ANTI:
       break;
+    case ::substrait::JoinRel_JoinType_JOIN_TYPE_RIGHT_ANTI: {
+      if (joinRel.has_advanced_extension()) {
+        const auto& extension = joinRel.advanced_extension();
+        if (SubstraitParser::configSetInOptimization(extension, "isNullAwareAntiJoin=") ||
+            SubstraitParser::configSetInOptimization(extension, "isBHJ=") ||
+            SubstraitParser::configSetInOptimization(extension, "isSMJ=") ||
+            SubstraitParser::configSetInOptimization(extension, "isExistenceJoin=")) {
+          LOG_VALIDATION_MSG("Right anti join requires an ordinary shuffled hash join.");
+          return false;
+        }
+      }
+      break;
+    }
     default:
       LOG_VALIDATION_MSG("Join type is not supported: " + std::to_string(joinRel.type()));
       return false;

@@ -76,7 +76,11 @@ case class ShuffledHashJoinExecTransformer(
         JoinRel.JoinType.JOIN_TYPE_LEFT_SEMI
       }
     case LeftAnti =>
-      JoinRel.JoinType.JOIN_TYPE_LEFT_ANTI
+      if (needSwitchChildren) {
+        JoinRel.JoinType.JOIN_TYPE_RIGHT_ANTI
+      } else {
+        JoinRel.JoinType.JOIN_TYPE_LEFT_ANTI
+      }
     case _ =>
       JoinRel.JoinType.UNRECOGNIZED
   }

@@ -139,8 +139,10 @@ RowTypePtr getJoinOutputType(
     const core::PlanNodePtr& rightNode,
     const core::JoinType& joinType) {
   // Decide output type.
-  // Output of right semi join cannot include columns from the left side.
-  bool outputMayIncludeLeftColumns = !(core::isRightSemiFilterJoin(joinType) || core::isRightSemiProjectJoin(joinType));
+  // Right semi and right anti joins emit only build-side columns.
+  bool outputMayIncludeLeftColumns =
+      !(core::isRightSemiFilterJoin(joinType) || core::isRightSemiProjectJoin(joinType) ||
+        core::isRightAntiJoin(joinType));
 
   // Output of left semi and anti joins cannot include columns from the right
   // side.
@@ -418,6 +420,21 @@ core::PlanNodePtr SubstraitToVeloxPlanConverter::toVeloxPlan(const ::substrait::
         isNullAwareAntiJoin = true;
       }
       joinType = core::JoinType::kAnti;
+      break;
+    }
+    case ::substrait::JoinRel_JoinType::JoinRel_JoinType_JOIN_TYPE_RIGHT_ANTI: {
+      // Enable ordinary shuffled hash anti joins only. Null-aware, broadcast,
+      // existence and merge joins require separate validation and are excluded.
+      if (sJoin.has_advanced_extension()) {
+        const auto& extension = sJoin.advanced_extension();
+        VELOX_CHECK(
+            !SubstraitParser::configSetInOptimization(extension, "isNullAwareAntiJoin=") &&
+                !SubstraitParser::configSetInOptimization(extension, "isBHJ=") &&
+                !SubstraitParser::configSetInOptimization(extension, "isSMJ=") &&
+                !SubstraitParser::configSetInOptimization(extension, "isExistenceJoin="),
+            "Right anti join requires an ordinary shuffled hash join.");
+      }
+      joinType = core::JoinType::kRightAnti;
       break;
     }
     default:
