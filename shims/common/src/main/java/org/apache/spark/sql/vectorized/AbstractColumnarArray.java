@@ -204,6 +204,24 @@ abstract class AbstractColumnarArray extends ArrayData {
   }
 
   @Override
+
+  public org.apache.spark.unsafe.types.TimestampNanosVal getTimestampNTZNanos(int ordinal) {
+
+    throw new UnsupportedOperationException("TimestampNTZNanos");
+
+  }
+
+
+  @Override
+
+  public org.apache.spark.unsafe.types.TimestampNanosVal getTimestampLTZNanos(int ordinal) {
+
+    throw new UnsupportedOperationException("TimestampLTZNanos");
+
+  }
+
+
+  @Override
   public CalendarInterval getInterval(int ordinal) {
     return data.getInterval(offset + ordinal);
   }

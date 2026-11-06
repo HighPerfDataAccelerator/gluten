@@ -82,7 +82,7 @@ class ColumnarArrowPythonRunner(
       startTime: Long,
       env: SparkEnv,
       worker: PythonWorker,
-      pid: scala.Option[scala.Int],
+      pid: scala.Option[PythonWorkerHandle],
       releasedOrClosed: AtomicBoolean,
       context: TaskContext): Iterator[ColumnarBatch] = {
 

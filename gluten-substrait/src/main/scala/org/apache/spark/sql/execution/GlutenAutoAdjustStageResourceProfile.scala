@@ -245,7 +245,7 @@ object GlutenAutoAdjustStageResourceProfile extends Logging {
       require(coresPerTask > 0, s"${CPUS_PER_TASK.key} should be positive, but was $coresPerTask")
       // Floor at one slot so the division below cannot throw on a combination Spark itself rejects
       // later with a dedicated message.
-      Math.max(coresPerExecutor / coresPerTask, 1)
+      Math.max((coresPerExecutor / coresPerTask).toInt, 1)
     }
     val conf = SQLConf.get
     conf.setConfString(GlutenCoreConfig.NUM_TASK_SLOTS_PER_EXECUTOR.key, taskSlots.toString)

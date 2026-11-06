@@ -74,6 +74,13 @@ sealed abstract class BatchCarrierRow extends InternalRowSparkCompatible {
 
   override def getMap(ordinal: Int): MapData = throw unsupported()
 
+  // Spark 5.0 SpecializedGetters (nanosecond timestamps).
+  def getTimestampLTZNanos(ordinal: Int): org.apache.spark.unsafe.types.TimestampNanosVal =
+    throw unsupported()
+
+  def getTimestampNTZNanos(ordinal: Int): org.apache.spark.unsafe.types.TimestampNanosVal =
+    throw unsupported()
+
   override def get(ordinal: Int, dataType: DataType): AnyRef = throw unsupported()
 
   private def unsupported() = {

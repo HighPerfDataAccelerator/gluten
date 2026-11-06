@@ -24,7 +24,7 @@ import org.apache.spark.storage.{BlockId, ShuffleBlockBatchId, ShuffleBlockId, S
 
 /** The internal shuffle manager instance used by GlutenShuffleManager. */
 private class ShuffleManagerRouter(lookup: ShuffleManagerLookup)
-  extends ShuffleManager
+  extends BlockingShuffleManager
   with Logging {
   import ShuffleManagerRouter._
   private val cache = new Cache()
@@ -131,6 +131,13 @@ private object ShuffleManagerRouter {
     }
   }
 
+  // Spark 5.0 (RTM): only BlockingShuffleManager exposes a block resolver.
+  private def blocking(m: ShuffleManager): BlockingShuffleManager = m match {
+    case b: BlockingShuffleManager => b
+    case other =>
+      throw new IllegalStateException(s"Shuffle manager ${other.getClass} has no block resolver")
+  }
+
   private class BlockResolver(cache: Cache) extends ShuffleBlockResolver {
     override def getBlockData(blockId: BlockId, dirs: Option[Array[String]]): ManagedBuffer = {
       val shuffleId = blockId match {
@@ -142,21 +149,21 @@ private object ShuffleManagerRouter {
           throw new IllegalArgumentException(
             "GlutenShuffleManager: Unsupported shuffle block id: " + blockId)
       }
-      cache.get(shuffleId).shuffleBlockResolver.getBlockData(blockId, dirs)
+      blocking(cache.get(shuffleId)).shuffleBlockResolver.getBlockData(blockId, dirs)
     }
 
     override def getMergedBlockData(
         blockId: ShuffleMergedBlockId,
         dirs: Option[Array[String]]): Seq[ManagedBuffer] = {
       val shuffleId = blockId.shuffleId
-      cache.get(shuffleId).shuffleBlockResolver.getMergedBlockData(blockId, dirs)
+      blocking(cache.get(shuffleId)).shuffleBlockResolver.getMergedBlockData(blockId, dirs)
     }
 
     override def getMergedBlockMeta(
         blockId: ShuffleMergedBlockId,
         dirs: Option[Array[String]]): MergedBlockMeta = {
       val shuffleId = blockId.shuffleId
-      cache.get(shuffleId).shuffleBlockResolver.getMergedBlockMeta(blockId, dirs)
+      blocking(cache.get(shuffleId)).shuffleBlockResolver.getMergedBlockMeta(blockId, dirs)
     }
 
     override def stop(): Unit = {

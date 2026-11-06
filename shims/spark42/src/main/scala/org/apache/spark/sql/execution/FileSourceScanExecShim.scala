@@ -57,6 +57,9 @@ abstract class FileSourceScanExecShim(
     tableIdentifier,
     disableBucketedScan) {
 
+  // Spark 5.0: Gluten scans are never forced to a single task.
+  override def markedForSingleTaskExecution: Boolean = false
+
   // Note: "metrics" is made transient to avoid sending driver-side metrics to tasks.
   @transient override lazy val metrics: Map[String, SQLMetric] = Map()
 
