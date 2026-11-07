@@ -29,6 +29,7 @@ import org.apache.spark.{Partitioner, RangePartitioner, ShuffleDependency}
 import org.apache.spark.rdd.RDD
 import org.apache.spark.serializer.Serializer
 import org.apache.spark.shuffle.{ColumnarShuffleDependency, GlutenShuffleUtils}
+import org.apache.spark.shuffle.gluten.pipelined.{ColumnarPipelinedShuffleDependency, PipelinedColumnarShuffleWriteProcessor}
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.expressions.{Attribute, BoundReference, UnsafeProjection, UnsafeRow}
 import org.apache.spark.sql.catalyst.expressions.codegen.LazilyGeneratedOrdering
@@ -90,7 +91,8 @@ object ExecUtil {
       serializer: Serializer,
       writeMetrics: Map[String, SQLMetric],
       metrics: Map[String, SQLMetric],
-      shuffleWriterType: ShuffleWriterType)
+      shuffleWriterType: ShuffleWriterType,
+      pipelined: Boolean = false)
       : ShuffleDependency[Int, ColumnarBatch, ColumnarBatch] = {
     metrics("numPartitions").set(newPartitioning.numPartitions)
     val executionId = rdd.sparkContext.getLocalProperty(SQLExecution.EXECUTION_ID_KEY)
@@ -205,6 +207,22 @@ object ExecUtil {
         rdd.mapPartitionsWithIndexInternal(
           (_, cbIter) => cbIter.map(cb => (0, cb)),
           isOrderSensitive = isOrderSensitive)
+    }
+
+    if (pipelined) {
+      if (newPartitioning.isInstanceOf[RangePartitioning]) {
+        // The range partitioner samples its input in a separate job, which a pipelined input
+        // cannot serve twice. Not supported by this prototype.
+        throw new GlutenNotSupportException("Range partitioning is not supported by pipelined shuffle")
+      }
+      return new ColumnarPipelinedShuffleDependency[Int, ColumnarBatch, ColumnarBatch](
+        rddWithDummyKey,
+        new PartitionIdPassThrough(newPartitioning.numPartitions),
+        new PipelinedColumnarShuffleWriteProcessor(writeMetrics),
+        nativePartitioning,
+        metrics,
+        shuffleWriterType,
+        serializer)
     }
 
     val dependency =

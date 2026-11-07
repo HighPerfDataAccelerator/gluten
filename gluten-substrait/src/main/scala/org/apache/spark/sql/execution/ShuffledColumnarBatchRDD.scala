@@ -115,6 +115,18 @@ class ShuffledColumnarBatchRDD(
     // as well as the `tempMetrics` for basic shuffle metrics.
     val sqlMetricsReporter = new SQLColumnarShuffleReadMetricsReporter(tempMetrics, metrics)
 
+    dependency match {
+      case pipelined: PipelinedColumnarRead =>
+        // Pipelined (streaming) shuffles are never AQE query stages, so each reduce task reads
+        // exactly its own partition range.
+        val (start, end) = split.asInstanceOf[ShuffledColumnarBatchRDDPartition].spec match {
+          case CoalescedPartitionSpec(s, e, _) => (s, e)
+          case other =>
+            throw new IllegalStateException(s"Unsupported spec for a pipelined shuffle: $other")
+        }
+        return pipelined.readPipelined(context, start, end, sqlMetricsReporter, executionMode)
+      case _ =>
+    }
     val reader = split.asInstanceOf[ShuffledColumnarBatchRDDPartition].spec match {
       case CoalescedPartitionSpec(startReducerIndex, endReducerIndex, _) =>
         getReader(
@@ -171,6 +183,19 @@ class ShuffledColumnarBatchRDD(
     super.clearDependencies()
     dependency = null
   }
+}
+
+/**
+ * Implemented by a pipelined (RTM streaming) columnar shuffle dependency, which reads its blocks
+ * through the pipelined shuffle manager instead of the blocking one.
+ */
+trait PipelinedColumnarRead {
+  def readPipelined(
+      context: TaskContext,
+      startPartition: Int,
+      endPartition: Int,
+      readMetrics: ShuffleReadMetricsReporter,
+      executionMode: StageExecutionMode): Iterator[ColumnarBatch]
 }
 
 object ShuffledColumnarBatchRDD {

@@ -621,6 +621,29 @@ class VeloxSparkPlanExecApi extends SparkPlanExecApi with Logging {
   }
   // scalastyle:on argcount
 
+  // scalastyle:off argcount
+  override def genPipelinedShuffleDependency(
+      rdd: RDD[ColumnarBatch],
+      childOutputAttributes: Seq[Attribute],
+      projectOutputAttributes: Seq[Attribute],
+      newPartitioning: Partitioning,
+      serializer: Serializer,
+      writeMetrics: Map[String, SQLMetric],
+      metrics: Map[String, SQLMetric],
+      shuffleWriterType: ShuffleWriterType)
+      : ShuffleDependency[Int, ColumnarBatch, ColumnarBatch] = {
+    ExecUtil.genShuffleDependency(
+      rdd,
+      childOutputAttributes,
+      newPartitioning,
+      serializer,
+      writeMetrics,
+      metrics,
+      shuffleWriterType,
+      pipelined = true)
+  }
+  // scalastyle:on argcount
+
   /** Determine whether to use sort-based shuffle based on shuffle partitioning and output. */
   override def getShuffleWriterType(
       partitioning: Partitioning,

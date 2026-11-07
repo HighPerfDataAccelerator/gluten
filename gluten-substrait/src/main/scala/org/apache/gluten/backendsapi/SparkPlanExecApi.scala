@@ -432,6 +432,19 @@ trait SparkPlanExecApi {
       metrics: Map[String, SQLMetric],
       shuffleWriterType: ShuffleWriterType): ShuffleDependency[Int, ColumnarBatch, ColumnarBatch]
 
+  /** Same as [[genShuffleDependency]], for a pipelined (RTM streaming) shuffle exchange. */
+  def genPipelinedShuffleDependency(
+      rdd: RDD[ColumnarBatch],
+      childOutputAttributes: Seq[Attribute],
+      outputAttributes: Seq[Attribute],
+      newPartitioning: Partitioning,
+      serializer: Serializer,
+      writeMetrics: Map[String, SQLMetric],
+      metrics: Map[String, SQLMetric],
+      shuffleWriterType: ShuffleWriterType): ShuffleDependency[Int, ColumnarBatch, ColumnarBatch] =
+    throw new UnsupportedOperationException("Pipelined shuffle is not supported by this backend")
+  // scalastyle:on argcount
+
   /** Determine whether to use sort-based shuffle based on shuffle partitioning and output. */
   def getShuffleWriterType(
       partitioning: Partitioning,

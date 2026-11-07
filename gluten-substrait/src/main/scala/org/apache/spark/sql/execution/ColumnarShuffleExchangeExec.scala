@@ -17,7 +17,7 @@
 package org.apache.spark.sql.execution
 
 import org.apache.gluten.backendsapi.BackendsApiManager
-import org.apache.gluten.config.ShuffleWriterType
+import org.apache.gluten.config.{HashShuffleWriterType, ShuffleWriterType}
 import org.apache.gluten.execution.{CPUStageMode, StageExecutionMode, ValidatablePlan, ValidationResult}
 import org.apache.gluten.extension.columnar.transition.Convention
 import org.apache.gluten.sql.shims.SparkShimLoader
@@ -44,12 +44,14 @@ case class ColumnarShuffleExchangeExec(
     shuffleOrigin: ShuffleOrigin = ENSURE_REQUIREMENTS,
     projectOutputAttributes: Seq[Attribute],
     advisoryPartitionSize: Option[Long] = None,
-    mapperStageMode: Option[StageExecutionMode] = None)
+    mapperStageMode: Option[StageExecutionMode] = None,
+    pipelined: Boolean = false)
   extends ShuffleExchangeLike
   with ValidatablePlan {
 
   override def nodeName: String =
-    "ColumnarExchange" + mapperStageMode.map(mode => s"(${mode.name})").getOrElse("")
+    "ColumnarExchange" + mapperStageMode.map(mode => s"(${mode.name})").getOrElse("") +
+      (if (pipelined) "(pipelined)" else "")
 
   private[sql] lazy val writeMetrics =
     SQLShuffleWriteMetricsReporter.createShuffleWriteMetrics(sparkContext)
@@ -57,7 +59,9 @@ case class ColumnarShuffleExchangeExec(
   private[sql] lazy val readMetrics =
     SQLColumnarShuffleReadMetricsReporter.createShuffleReadMetrics(sparkContext)
 
-  lazy val shuffleWriterType: ShuffleWriterType = getShuffleWriterType
+  // A pipelined shuffle always uses the push-mode hash writer, whose payloads the hash reader reads.
+  lazy val shuffleWriterType: ShuffleWriterType =
+    if (pipelined) HashShuffleWriterType else getShuffleWriterType
 
   lazy val serializer: Serializer = BackendsApiManager.getSparkPlanExecApiInstance
     .createColumnarBatchSerializer(schema, metrics, shuffleWriterType)
@@ -73,7 +77,9 @@ case class ColumnarShuffleExchangeExec(
 
   // 'mapOutputStatisticsFuture' is only needed when enable AQE.
   @transient override lazy val mapOutputStatisticsFuture: Future[MapOutputStatistics] = {
-    if (inputColumnarRDD.getNumPartitions == 0) {
+    if (pipelined) {
+      throw new IllegalStateException("A pipelined shuffle exchange cannot be a query stage")
+    } else if (inputColumnarRDD.getNumPartitions == 0) {
       Future.successful(null)
     } else {
       sparkContext.submitMapStage(columnarShuffleDependency)
@@ -87,7 +93,18 @@ case class ColumnarShuffleExchangeExec(
    */
   @transient
   lazy val columnarShuffleDependency: ShuffleDependency[Int, ColumnarBatch, ColumnarBatch] = {
-    BackendsApiManager.getSparkPlanExecApiInstance.genShuffleDependency(
+    val api = BackendsApiManager.getSparkPlanExecApiInstance
+    if (pipelined) {
+      api.genPipelinedShuffleDependency(
+        inputColumnarRDD,
+        child.output,
+        projectOutputAttributes,
+        outputPartitioning,
+        serializer,
+        writeMetrics,
+        metrics,
+        shuffleWriterType)
+    } else api.genShuffleDependency(
       inputColumnarRDD,
       child.output,
       projectOutputAttributes,
@@ -162,7 +179,8 @@ case class ColumnarShuffleExchangeExec(
 
   // super.stringArgs ++ Iterator(output.map(o => s"${o}#${o.dataType.simpleString}"))
   override def stringArgs: Iterator[Any] = {
-    super.stringArgs ++ Iterator(s"[shuffle_writer_type=${shuffleWriterType.name}]")
+    super.stringArgs.filterNot(_ == pipelined) ++
+      Iterator(s"[shuffle_writer_type=${shuffleWriterType.name}]")
   }
 
   override def batchType(): Convention.BatchType = BackendsApiManager.getSettings.primaryBatchType
@@ -214,7 +232,8 @@ object ColumnarShuffleExchangeExec extends Logging {
       child,
       plan.shuffleOrigin,
       shuffleOutputAttributes,
-      advisoryPartitionSize = SparkShimLoader.getSparkShims.getShuffleAdvisoryPartitionSize(plan)
+      advisoryPartitionSize = SparkShimLoader.getSparkShims.getShuffleAdvisoryPartitionSize(plan),
+      pipelined = plan.pipelined
     )
   }
 }
