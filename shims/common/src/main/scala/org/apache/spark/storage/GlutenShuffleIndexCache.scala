@@ -103,7 +103,7 @@ object GlutenShuffleIndexCache extends Logging {
         Some((id.shuffleId, id.mapId, id.startReduceId, id.endReduceId))
       case _ => None
     }
-    (SparkEnv.get.shuffleManager.shuffleBlockResolver, range) match {
+    (SparkEnv.get.blockingShuffleManager.shuffleBlockResolver, range) match {
       case (resolver: IndexShuffleBlockResolver, Some((shuffleId, mapId, start, end))) =>
         val offsets = indexOffsets(resolver, shuffleId, mapId, dirs, maxBytes)
         if (end >= offsets.length || start > end) {

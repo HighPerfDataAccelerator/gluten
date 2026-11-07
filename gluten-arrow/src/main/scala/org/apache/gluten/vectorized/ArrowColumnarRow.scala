@@ -105,6 +105,16 @@ final class ArrowColumnarRow(writableColumns: Array[ArrowWritableColumnVector], 
   override def getBinary(ordinal: Int): Array[Byte] =
     columns(ordinal).getBinary(rowId)
 
+  def getTimestampNTZNanos(ordinal: Int): org.apache.spark.unsafe.types.TimestampNanosVal =
+
+    throw new UnsupportedOperationException("TimestampNTZNanos")
+
+
+  def getTimestampLTZNanos(ordinal: Int): org.apache.spark.unsafe.types.TimestampNanosVal =
+
+    throw new UnsupportedOperationException("TimestampLTZNanos")
+
+
   override def getInterval(ordinal: Int): CalendarInterval =
     columns(ordinal).getInterval(rowId)
 
