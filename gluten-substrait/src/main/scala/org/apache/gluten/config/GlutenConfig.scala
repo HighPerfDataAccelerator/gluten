@@ -1219,7 +1219,7 @@ object GlutenConfig extends ConfigRegistry {
           "Not compatible with dictionary encoding; if both are enabled, " +
           "type-aware compression is automatically disabled.")
       .booleanConf
-      .createWithDefault(false)
+      .createWithDefault(true)
 
   val COLUMNAR_MAX_BATCH_SIZE =
     buildConf("spark.gluten.sql.columnar.maxBatchSize").intConf

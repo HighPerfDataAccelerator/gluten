@@ -195,7 +195,7 @@ void VeloxBackend::init(
 
   std::string valueIdPrefetchDistance;
   if (gflags::GetCommandLineOption("velox_vector_hasher_value_id_prefetch_distance", &valueIdPrefetchDistance)) {
-    const auto distance = backendConf_->get<int32_t>(kVectorHasherValueIdPrefetchDistance, 0);
+    const auto distance = backendConf_->get<int32_t>(kVectorHasherValueIdPrefetchDistance, kVectorHasherValueIdPrefetchDistanceDefault);
     VELOX_CHECK_GE(distance, 0, "Value-ID prefetch distance must be non-negative");
     gflags::SetCommandLineOption(
         "velox_vector_hasher_value_id_prefetch_distance", std::to_string(distance).c_str());
@@ -205,13 +205,13 @@ void VeloxBackend::init(
   if (gflags::GetCommandLineOption("velox_might_contain_share_filters", &mightContainShareFilters)) {
     gflags::SetCommandLineOption(
         "velox_might_contain_share_filters",
-        backendConf_->get<bool>(kMightContainShareFilters, false) ? "true" : "false");
+        backendConf_->get<bool>(kMightContainShareFilters, kMightContainShareFiltersDefault) ? "true" : "false");
   }
 
   std::string mightContainMemo;
   if (gflags::GetCommandLineOption("velox_might_contain_memo", &mightContainMemo)) {
     gflags::SetCommandLineOption(
-        "velox_might_contain_memo", backendConf_->get<bool>(kMightContainMemoEnabled, false) ? "true" : "false");
+        "velox_might_contain_memo", backendConf_->get<bool>(kMightContainMemoEnabled, kMightContainMemoEnabledDefault) ? "true" : "false");
   }
 
   // Application-static: never mutate this flag from a task/query config.
