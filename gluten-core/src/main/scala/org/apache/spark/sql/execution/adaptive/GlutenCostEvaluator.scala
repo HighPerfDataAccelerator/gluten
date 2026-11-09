@@ -33,8 +33,22 @@ case class GlutenCostEvaluator() extends CostEvaluator with SQLConfHelper {
     val forceOptimizeSkewedJoin =
       conf.getConfString("spark.sql.adaptive.forceOptimizeSkewedJoin").toBoolean
     val clazz = Utils.classForName("org.apache.spark.sql.execution.adaptive.SimpleCostEvaluator")
-    val ctor = clazz.getConstructor(classOf[Boolean])
-    ctor.newInstance(forceOptimizeSkewedJoin.asInstanceOf[Object]).asInstanceOf[CostEvaluator]
+    // Spark 5.0 adds a second `countLocalSort` parameter.
+    val twoArg = clazz.getConstructors.find(_.getParameterCount == 2)
+    twoArg match {
+      case Some(ctor) =>
+        val countLocalSort = conf
+          .getConfString("spark.sql.adaptive.costEvaluator.countLocalSort.enabled")
+          .toBoolean
+        ctor
+          .newInstance(
+            forceOptimizeSkewedJoin.asInstanceOf[Object],
+            countLocalSort.asInstanceOf[Object])
+          .asInstanceOf[CostEvaluator]
+      case None =>
+        val ctor = clazz.getConstructor(classOf[Boolean])
+        ctor.newInstance(forceOptimizeSkewedJoin.asInstanceOf[Object]).asInstanceOf[CostEvaluator]
+    }
   }
 
   override def evaluateCost(plan: SparkPlan): Cost = {

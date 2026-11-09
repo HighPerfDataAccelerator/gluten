@@ -55,7 +55,6 @@ object SparkTaskUtil {
     val metricsSystem =
       MetricsSystem.createMetricsSystem("GLUTEN_UNSAFE", conf).asInstanceOf[Object]
     val taskMetrics = TaskMetrics.empty.asInstanceOf[Object]
-    val cpus = 1.asInstanceOf[Object]
     val resources = Map.empty.asInstanceOf[Object]
 
     val ctor = {
@@ -64,6 +63,12 @@ object SparkTaskUtil {
         ctors.size == 1,
         s"Expected TaskContextImpl to declare exactly one constructor, found ${ctors.size}")
       ctors.head
+    }
+    // Spark 5.0 declares the task CPU amount as BigDecimal (fractional task CPUs); earlier
+    // versions use Int.
+    val cpus: Object = ctor.getParameterTypes()(10) match {
+      case c if c == classOf[scala.math.BigDecimal] => scala.math.BigDecimal(1)
+      case _ => 1.asInstanceOf[Object]
     }
 
     // The arguments below are positional: their order must match TaskContextImpl's primary

@@ -17,7 +17,9 @@
 package org.apache.gluten.backendsapi.velox
 
 import org.apache.gluten.backendsapi.{BackendsApiManager, ValidatorApi}
-import org.apache.gluten.config.VeloxConfig
+import org.apache.gluten.config.{GlutenConfig, VeloxConfig}
+import org.apache.gluten.experimental.StatelessPlanValidation
+import org.apache.gluten.utils.ConfigUtil
 import org.apache.gluten.execution.ValidationResult
 import org.apache.gluten.substrait.`type`.TypeNode
 import org.apache.gluten.substrait.SubstraitContext
@@ -32,6 +34,7 @@ import org.apache.spark.sql.catalyst.plans.physical.Partitioning
 import org.apache.spark.sql.execution.SparkPlan
 import org.apache.spark.sql.types._
 import org.apache.spark.task.TaskResources
+import org.apache.spark.sql.internal.{GlutenConfigUtil, SQLConf}
 
 import io.substrait.proto.SimpleExtensionDeclaration
 
@@ -46,10 +49,29 @@ class VeloxValidatorApi extends ValidatorApi {
     true
 
   override def doNativeValidateWithFailureReason(plan: PlanNode): ValidationResult = {
-    TaskResources.runUnsafe {
-      val validator = NativePlanEvaluator.create(BackendsApiManager.getBackendName)
-      asValidationResult(validator.doNativeValidateWithFailureReason(plan.toProtobuf.toByteArray))
+    val enabled = SQLConf.get
+      .getConfString("spark.gluten.experimental.statelessValidation.enabled", "false").toBoolean
+    if (!enabled || TaskResources.inSparkTask()) {
+      return TaskResources.runUnsafe {
+        val validator = NativePlanEvaluator.create(BackendsApiManager.getBackendName)
+        asValidationResult(validator.doNativeValidateWithFailureReason(plan.toProtobuf.toByteArray))
+      }
     }
+    val bytes = plan.toProtobuf.toByteArray
+    val conf = ConfigUtil.serialize(GlutenConfig.getNativeSessionConf(
+      BackendsApiManager.getBackendName,
+      GlutenConfigUtil.parseConfig(SQLConf.get.getAllConfs)).asJava)
+    val direct = StatelessPlanValidation.validate(bytes, conf)
+    if (SQLConf.get
+        .getConfString("spark.gluten.experimental.statelessValidation.verify", "false").toBoolean) {
+      return TaskResources.runUnsafe {
+        val validator = NativePlanEvaluator.create(BackendsApiManager.getBackendName)
+        val original = validator.doNativeValidateWithFailureReason(bytes)
+        StatelessPlanValidation.checkEquivalent(original, direct)
+        asValidationResult(original)
+      }
+    }
+    asValidationResult(direct)
   }
 
   override def doNativeValidateExpression(
