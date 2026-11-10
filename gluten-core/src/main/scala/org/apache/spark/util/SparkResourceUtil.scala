@@ -82,12 +82,13 @@ object SparkResourceUtil extends Logging {
     // plugin init, before Spark validates the value, so fail fast on a non-positive setting rather
     // than dividing by it: a zero would throw an opaque "/ by zero" ArithmeticException and a
     // negative would silently produce negative task slots and off-heap budgets.
-    val taskCores = conf.getInt("spark.task.cpus", 1)
+    // Spark 5.0 accepts fractional task CPUs (e.g. 0.5 oversubscribes two tasks per core).
+    val taskCores = BigDecimal(conf.get("spark.task.cpus", "1").trim)
     require(taskCores > 0, s"spark.task.cpus should be positive, but was $taskCores")
     // Floor at one slot. spark.task.cpus > executor cores is an invalid combination that Spark
     // rejects later with a dedicated message, but callers divide by the slot count during init, so
     // a 0 quotient would throw before Spark can report the real misconfiguration.
-    Math.max(executorCores / taskCores, 1)
+    Math.max((BigDecimal(executorCores) / taskCores).toInt, 1)
   }
 
   def isLocalMaster(conf: SparkConf): Boolean = {
