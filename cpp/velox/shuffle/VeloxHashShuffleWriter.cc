@@ -1155,6 +1155,9 @@ arrow::Result<std::vector<std::shared_ptr<arrow::Buffer>>> VeloxHashShuffleWrite
   SCOPED_TIMER(cpuWallTimingList_[CpuWallTimingCreateRbFromBuffer]);
 
   auto numRows = partitionBufferBase_[partitionId];
+  // Buffers evicted while stopping are compressed and released right away, so
+  // shrinking them to fit would only copy the data.
+  const bool shrinkToFit = splitState_ != SplitState::kStopEvict;
   auto fixedWidthIdx = 0;
   auto binaryIdx = 0;
   auto numFields = schema_->num_fields();
@@ -1176,7 +1179,7 @@ arrow::Result<std::vector<std::shared_ptr<arrow::Buffer>>> VeloxHashShuffleWrite
             allBuffers.push_back(
                 arrow::SliceBuffer(buffers[kValidityBufferIndex], 0, arrow::bit_util::BytesForBits(numRows)));
           } else {
-            RETURN_NOT_OK(buffers[kValidityBufferIndex]->Resize(validityBufferSize, true));
+            RETURN_NOT_OK(buffers[kValidityBufferIndex]->Resize(validityBufferSize, shrinkToFit));
             allBuffers.push_back(std::move(buffers[kValidityBufferIndex]));
           }
         } else {
@@ -1189,7 +1192,7 @@ arrow::Result<std::vector<std::shared_ptr<arrow::Buffer>>> VeloxHashShuffleWrite
         if (reuseBuffers) {
           allBuffers.push_back(arrow::SliceBuffer(buffers[kBinaryLengthBufferIndex], 0, lengthBufferSize));
         } else {
-          RETURN_NOT_OK(buffers[kBinaryLengthBufferIndex]->Resize(lengthBufferSize, true));
+          RETURN_NOT_OK(buffers[kBinaryLengthBufferIndex]->Resize(lengthBufferSize, shrinkToFit));
           allBuffers.push_back(std::move(buffers[kBinaryLengthBufferIndex]));
         }
 
@@ -1200,7 +1203,7 @@ arrow::Result<std::vector<std::shared_ptr<arrow::Buffer>>> VeloxHashShuffleWrite
         if (reuseBuffers) {
           allBuffers.push_back(arrow::SliceBuffer(buffers[kBinaryValueBufferIndex], 0, valueBufferSize));
         } else if (valueBufferSize > 0) {
-          RETURN_NOT_OK(buffers[kBinaryValueBufferIndex]->Resize(valueBufferSize, true));
+          RETURN_NOT_OK(buffers[kBinaryValueBufferIndex]->Resize(valueBufferSize, shrinkToFit));
           allBuffers.push_back(std::move(buffers[kBinaryValueBufferIndex]));
         } else {
           // Binary value buffer size can be 0, in which case cannot be resized.
@@ -1230,7 +1233,7 @@ arrow::Result<std::vector<std::shared_ptr<arrow::Buffer>>> VeloxHashShuffleWrite
             allBuffers.push_back(
                 arrow::SliceBuffer(buffers[kValidityBufferIndex], 0, arrow::bit_util::BytesForBits(numRows)));
           } else {
-            RETURN_NOT_OK(buffers[kValidityBufferIndex]->Resize(validityBufferSize, true));
+            RETURN_NOT_OK(buffers[kValidityBufferIndex]->Resize(validityBufferSize, shrinkToFit));
             allBuffers.push_back(std::move(buffers[kValidityBufferIndex]));
           }
         } else {
@@ -1253,7 +1256,7 @@ arrow::Result<std::vector<std::shared_ptr<arrow::Buffer>>> VeloxHashShuffleWrite
           auto slicedValueBuffer = arrow::SliceBuffer(valueBuffer, 0, valueBufferSize);
           allBuffers.push_back(std::move(slicedValueBuffer));
         } else {
-          RETURN_NOT_OK(buffers[kFixedWidthValueBufferIndex]->Resize(valueBufferSize, true));
+          RETURN_NOT_OK(buffers[kFixedWidthValueBufferIndex]->Resize(valueBufferSize, shrinkToFit));
           allBuffers.push_back(std::move(buffers[kFixedWidthValueBufferIndex]));
         }
         fixedWidthIdx++;
