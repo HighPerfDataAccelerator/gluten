@@ -1,5 +1,7 @@
 # Vera (NVIDIA Olympus, aarch64, 352 logical CPUs) SF1K tooling
 
+**Start with [REPRODUCE.md](REPRODUCE.md)** (setups, build steps, run steps, troubleshooting).
+
 Everything needed to reproduce the Vera NDS / NDS-H SF1K numbers and the RTM experiments, besides the
 engine source in this branch and in winningsix/spark `rtm-vera-fixes`.
 

@@ -1,0 +1,178 @@
+diff --git a/backends-velox/src/main/java/org/apache/gluten/experimental/StatelessPlanValidation.java b/backends-velox/src/main/java/org/apache/gluten/experimental/StatelessPlanValidation.java
+new file mode 100644
+index 000000000..417959a7b
+--- /dev/null
++++ b/backends-velox/src/main/java/org/apache/gluten/experimental/StatelessPlanValidation.java
+@@ -0,0 +1,38 @@
++/*
++ * Licensed to the Apache Software Foundation (ASF) under one or more
++ * contributor license agreements.  See the NOTICE file distributed with
++ * this work for additional information regarding copyright ownership.
++ * The ASF licenses this file to You under the Apache License, Version 2.0
++ * (the "License"); you may not use this file except in compliance with
++ * the License.  You may obtain a copy of the License at
++ *
++ *    http://www.apache.org/licenses/LICENSE-2.0
++ *
++ * Unless required by applicable law or agreed to in writing, software
++ * distributed under the License is distributed on an "AS IS" BASIS,
++ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++ * See the License for the specific language governing permissions and
++ * limitations under the License.
++ */
++package org.apache.gluten.experimental;
++import org.apache.gluten.validate.NativePlanValidationInfo;
++import java.util.concurrent.atomic.AtomicLong;
++public final class StatelessPlanValidation {
++  private static final AtomicLong CALLS = new AtomicLong();
++  private static final AtomicLong CHECKS = new AtomicLong();
++  private StatelessPlanValidation() {}
++  private static native NativePlanValidationInfo nativeValidate(byte[] plan, byte[] conf);
++  public static NativePlanValidationInfo validate(byte[] plan, byte[] conf) {
++    NativePlanValidationInfo out = nativeValidate(plan, conf);
++    CALLS.incrementAndGet();
++    return out;
++  }
++  public static void checkEquivalent(NativePlanValidationInfo expected, NativePlanValidationInfo actual) {
++    if (expected.isSupported != actual.isSupported || !expected.fallbackInfo.equals(actual.fallbackInfo)) {
++      throw new AssertionError("Stateless validation differs from original: " + expected.isSupported + ":" + expected.fallbackInfo + " vs " + actual.isSupported + ":" + actual.fallbackInfo);
++    }
++    CHECKS.incrementAndGet();
++  }
++  public static long validationCount() { return CALLS.get(); }
++  public static long equivalenceCount() { return CHECKS.get(); }
++}
+diff --git a/backends-velox/src/main/scala/org/apache/gluten/backendsapi/velox/VeloxValidatorApi.scala b/backends-velox/src/main/scala/org/apache/gluten/backendsapi/velox/VeloxValidatorApi.scala
+index 31fd5ee2b..84976e64f 100644
+--- a/backends-velox/src/main/scala/org/apache/gluten/backendsapi/velox/VeloxValidatorApi.scala
++++ b/backends-velox/src/main/scala/org/apache/gluten/backendsapi/velox/VeloxValidatorApi.scala
+@@ -17,7 +17,9 @@
+ package org.apache.gluten.backendsapi.velox
+ 
+ import org.apache.gluten.backendsapi.{BackendsApiManager, ValidatorApi}
+-import org.apache.gluten.config.VeloxConfig
++import org.apache.gluten.config.{GlutenConfig, VeloxConfig}
++import org.apache.gluten.experimental.StatelessPlanValidation
++import org.apache.gluten.utils.ConfigUtil
+ import org.apache.gluten.execution.ValidationResult
+ import org.apache.gluten.substrait.`type`.TypeNode
+ import org.apache.gluten.substrait.SubstraitContext
+@@ -32,6 +34,7 @@ import org.apache.spark.sql.catalyst.plans.physical.Partitioning
+ import org.apache.spark.sql.execution.SparkPlan
+ import org.apache.spark.sql.types._
+ import org.apache.spark.task.TaskResources
++import org.apache.spark.sql.internal.{GlutenConfigUtil, SQLConf}
+ 
+ import io.substrait.proto.SimpleExtensionDeclaration
+ 
+@@ -46,10 +49,29 @@ class VeloxValidatorApi extends ValidatorApi {
+     true
+ 
+   override def doNativeValidateWithFailureReason(plan: PlanNode): ValidationResult = {
+-    TaskResources.runUnsafe {
+-      val validator = NativePlanEvaluator.create(BackendsApiManager.getBackendName)
+-      asValidationResult(validator.doNativeValidateWithFailureReason(plan.toProtobuf.toByteArray))
++    val enabled = SQLConf.get
++      .getConfString("spark.gluten.experimental.statelessValidation.enabled", "false").toBoolean
++    if (!enabled || TaskResources.inSparkTask()) {
++      return TaskResources.runUnsafe {
++        val validator = NativePlanEvaluator.create(BackendsApiManager.getBackendName)
++        asValidationResult(validator.doNativeValidateWithFailureReason(plan.toProtobuf.toByteArray))
++      }
++    }
++    val bytes = plan.toProtobuf.toByteArray
++    val conf = ConfigUtil.serialize(GlutenConfig.getNativeSessionConf(
++      BackendsApiManager.getBackendName,
++      GlutenConfigUtil.parseConfig(SQLConf.get.getAllConfs)).asJava)
++    val direct = StatelessPlanValidation.validate(bytes, conf)
++    if (SQLConf.get
++        .getConfString("spark.gluten.experimental.statelessValidation.verify", "false").toBoolean) {
++      return TaskResources.runUnsafe {
++        val validator = NativePlanEvaluator.create(BackendsApiManager.getBackendName)
++        val original = validator.doNativeValidateWithFailureReason(bytes)
++        StatelessPlanValidation.checkEquivalent(original, direct)
++        asValidationResult(original)
++      }
+     }
++    asValidationResult(direct)
+   }
+ 
+   override def doNativeValidateExpression(
+diff --git a/cpp/velox/jni/VeloxJniWrapper.cc b/cpp/velox/jni/VeloxJniWrapper.cc
+index ae7a36aaf..85b962e8d 100644
+--- a/cpp/velox/jni/VeloxJniWrapper.cc
++++ b/cpp/velox/jni/VeloxJniWrapper.cc
+@@ -53,6 +53,11 @@
+ #include "utils/GpuBufferBatchResizer.h"
+ #endif
+ 
++DECLARE_bool(velox_exception_user_stacktrace_enabled);
++DECLARE_bool(velox_exception_system_stacktrace_enabled);
++DECLARE_bool(velox_memory_use_hugepages);
++DECLARE_bool(velox_memory_pool_capacity_transfer_across_tasks);
++
+ using namespace gluten;
+ using namespace facebook;
+ 
+@@ -210,6 +215,61 @@ Java_org_apache_gluten_vectorized_PlanEvaluatorJniWrapper_nativeValidateWithFail
+   JNI_METHOD_END(nullptr)
+ }
+ 
++JNIEXPORT jobject JNICALL
++Java_org_apache_gluten_experimental_StatelessPlanValidation_nativeValidate( // NOLINT
++    JNIEnv* env,
++    jclass,
++    jbyteArray planArray,
++    jbyteArray sessionConf) {
++  JNI_METHOD_START
++  // Keep the same session-derived flag updates as VeloxRuntime construction.
++  // Plan validation itself uses the backend's default leaf pool and does not
++  // require task executors or scoped scan connectors.
++  const auto safeConf = getByteArrayElementsSafe(env, sessionConf);
++  auto configMap = parseConfMap(env, safeConf.elems(), safeConf.length());
++  facebook::velox::config::ConfigBase config(std::move(configMap));
++  FLAGS_minloglevel = config.get<uint32_t>(kGlogSeverityLevel, FLAGS_minloglevel);
++  FLAGS_v = config.get<uint32_t>(kGlogVerboseLevel, FLAGS_v);
++  FLAGS_velox_exception_user_stacktrace_enabled =
++      config.get<bool>(kEnableUserExceptionStacktrace, FLAGS_velox_exception_user_stacktrace_enabled);
++  FLAGS_velox_exception_system_stacktrace_enabled =
++      config.get<bool>(kEnableSystemExceptionStacktrace, FLAGS_velox_exception_system_stacktrace_enabled);
++  FLAGS_velox_memory_use_hugepages = config.get<bool>(kMemoryUseHugePages, FLAGS_velox_memory_use_hugepages);
++  FLAGS_velox_memory_pool_capacity_transfer_across_tasks =
++      config.get<bool>(kMemoryPoolCapacityTransferAcrossTasks, FLAGS_velox_memory_pool_capacity_transfer_across_tasks);
++  const auto safeArray = getByteArrayElementsSafe(env, planArray);
++  const auto planData = safeArray.elems();
++  const auto planSize = env->GetArrayLength(planArray);
++  if (config.get<bool>(kDebugModeEnabled, false)) {
++    try {
++      const auto jsonPlan = substraitFromPbToJson("Plan", planData, planSize);
++      LOG(INFO) << std::string(50, '#') << " received substrait::Plan: for validation";
++      LOG(INFO) << jsonPlan;
++    } catch (const std::exception& e) {
++      LOG(WARNING) << "Error converting Substrait plan for validation to JSON: " << e.what();
++    }
++  }
++
++  const auto pool = defaultLeafVeloxMemoryPool().get();
++  SubstraitToVeloxPlanValidator planValidator(pool);
++  ::substrait::Plan subPlan;
++  parseProtobuf(planData, planSize, &subPlan);
++
++  try {
++    const auto isSupported = planValidator.validate(subPlan);
++    const auto logs = planValidator.getValidateLog();
++    std::string concatLog;
++    for (int i = 0; i < logs.size(); i++) {
++      concatLog += logs[i] + "@";
++    }
++    return env->NewObject(infoCls, infoClsInitMethod, isSupported, env->NewStringUTF(concatLog.c_str()));
++  } catch (std::invalid_argument& e) {
++    LOG(INFO) << "Failed to validate substrait plan because " << e.what();
++    return env->NewObject(infoCls, infoClsInitMethod, false, env->NewStringUTF(""));
++  }
++  JNI_METHOD_END(nullptr)
++}
++
+ JNIEXPORT jboolean JNICALL Java_org_apache_gluten_vectorized_PlanEvaluatorJniWrapper_nativeValidateExpression( // NOLINT
+     JNIEnv* env,
+     jobject wrapper,
