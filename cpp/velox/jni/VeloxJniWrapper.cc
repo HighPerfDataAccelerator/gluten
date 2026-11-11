@@ -53,6 +53,11 @@
 #include "utils/GpuBufferBatchResizer.h"
 #endif
 
+DECLARE_bool(velox_exception_user_stacktrace_enabled);
+DECLARE_bool(velox_exception_system_stacktrace_enabled);
+DECLARE_bool(velox_memory_use_hugepages);
+DECLARE_bool(velox_memory_pool_capacity_transfer_across_tasks);
+
 using namespace gluten;
 using namespace facebook;
 
@@ -181,6 +186,61 @@ Java_org_apache_gluten_vectorized_PlanEvaluatorJniWrapper_nativeValidateWithFail
   const auto planSize = env->GetArrayLength(planArray);
   const auto runtime = dynamic_cast<VeloxRuntime*>(ctx);
   if (runtime->debugModeEnabled()) {
+    try {
+      const auto jsonPlan = substraitFromPbToJson("Plan", planData, planSize);
+      LOG(INFO) << std::string(50, '#') << " received substrait::Plan: for validation";
+      LOG(INFO) << jsonPlan;
+    } catch (const std::exception& e) {
+      LOG(WARNING) << "Error converting Substrait plan for validation to JSON: " << e.what();
+    }
+  }
+
+  const auto pool = defaultLeafVeloxMemoryPool().get();
+  SubstraitToVeloxPlanValidator planValidator(pool);
+  ::substrait::Plan subPlan;
+  parseProtobuf(planData, planSize, &subPlan);
+
+  try {
+    const auto isSupported = planValidator.validate(subPlan);
+    const auto logs = planValidator.getValidateLog();
+    std::string concatLog;
+    for (int i = 0; i < logs.size(); i++) {
+      concatLog += logs[i] + "@";
+    }
+    return env->NewObject(infoCls, infoClsInitMethod, isSupported, env->NewStringUTF(concatLog.c_str()));
+  } catch (std::invalid_argument& e) {
+    LOG(INFO) << "Failed to validate substrait plan because " << e.what();
+    return env->NewObject(infoCls, infoClsInitMethod, false, env->NewStringUTF(""));
+  }
+  JNI_METHOD_END(nullptr)
+}
+
+JNIEXPORT jobject JNICALL
+Java_org_apache_gluten_experimental_StatelessPlanValidation_nativeValidate( // NOLINT
+    JNIEnv* env,
+    jclass,
+    jbyteArray planArray,
+    jbyteArray sessionConf) {
+  JNI_METHOD_START
+  // Keep the same session-derived flag updates as VeloxRuntime construction.
+  // Plan validation itself uses the backend's default leaf pool and does not
+  // require task executors or scoped scan connectors.
+  const auto safeConf = getByteArrayElementsSafe(env, sessionConf);
+  auto configMap = parseConfMap(env, safeConf.elems(), safeConf.length());
+  facebook::velox::config::ConfigBase config(std::move(configMap));
+  FLAGS_minloglevel = config.get<uint32_t>(kGlogSeverityLevel, FLAGS_minloglevel);
+  FLAGS_v = config.get<uint32_t>(kGlogVerboseLevel, FLAGS_v);
+  FLAGS_velox_exception_user_stacktrace_enabled =
+      config.get<bool>(kEnableUserExceptionStacktrace, FLAGS_velox_exception_user_stacktrace_enabled);
+  FLAGS_velox_exception_system_stacktrace_enabled =
+      config.get<bool>(kEnableSystemExceptionStacktrace, FLAGS_velox_exception_system_stacktrace_enabled);
+  FLAGS_velox_memory_use_hugepages = config.get<bool>(kMemoryUseHugePages, FLAGS_velox_memory_use_hugepages);
+  FLAGS_velox_memory_pool_capacity_transfer_across_tasks =
+      config.get<bool>(kMemoryPoolCapacityTransferAcrossTasks, FLAGS_velox_memory_pool_capacity_transfer_across_tasks);
+  const auto safeArray = getByteArrayElementsSafe(env, planArray);
+  const auto planData = safeArray.elems();
+  const auto planSize = env->GetArrayLength(planArray);
+  if (config.get<bool>(kDebugModeEnabled, false)) {
     try {
       const auto jsonPlan = substraitFromPbToJson("Plan", planData, planSize);
       LOG(INFO) << std::string(50, '#') << " received substrait::Plan: for validation";
