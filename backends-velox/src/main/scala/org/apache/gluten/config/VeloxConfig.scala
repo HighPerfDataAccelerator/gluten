@@ -1133,6 +1133,16 @@ object VeloxConfig extends ConfigRegistry {
       .booleanConf
       .createWithDefault(false)
 
+  val Q8_EARLY_PART_BROADCAST_ENABLED =
+    buildConf("spark.gluten.experimental.q8EarlyPartBroadcast.enabled")
+      .experimental()
+      .doc(
+        "Broadcast the existing filtered part input in the supported TPC-H Q8 plan before " +
+          "shuffle planning. Requires Q8EarlyBroadcastExtension. This query-specific experiment " +
+          "preserves existing hints and is not a general broadcast cost policy.")
+      .booleanConf
+      .createWithDefault(false)
+
   val VELOX_BROADCAST_BUILD_MERGE_BATCHES =
     buildConf("spark.gluten.velox.broadcastBuild.mergeBatches")
       .doc(
