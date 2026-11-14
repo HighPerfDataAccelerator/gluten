@@ -211,6 +211,17 @@ object VeloxConfig extends ConfigRegistry {
       .booleanConf
       .createWithDefault(false)
 
+  val Q5_SECOND_HOP_BLOOM_ENABLED =
+    buildConf("spark.gluten.experimental.q5SecondHopBloom.enabled")
+      .experimental()
+      .doc(
+        "Enable the experimental Q5-shaped supplier-to-lineitem Bloom filter after the " +
+          "existing runtime cascade. Requires Q5SecondHopBloomExtension and runtimeBloom.cascade " +
+          "to be enabled. Uses the existing filter-count, creation-size and scan thresholds. " +
+          "Default off; benchmark at the intended scale before enabling.")
+      .booleanConf
+      .createWithDefault(false)
+
   val RUNTIME_BLOOM_CASCADE_ENABLED =
     buildConf("spark.gluten.sql.columnar.backend.velox.runtimeBloom.cascade.enabled")
       .doc("Build bounded extra runtime Bloom filters from dimensions already selected by stock runtime filters. Int/long inner join keys only; disabled by default.")
