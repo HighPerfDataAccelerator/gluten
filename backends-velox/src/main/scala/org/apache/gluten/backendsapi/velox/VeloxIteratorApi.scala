@@ -165,14 +165,18 @@ class VeloxIteratorApi extends IteratorApi with Logging {
     // Only serialize plan once, save lots time when plan is complex.
     val planByteArray = wsCtx.root.toProtobuf.toByteArray
 
-    splitInfos.zipWithIndex.map {
-      case (splitInfos, index) =>
-        GlutenPartition(
-          index,
-          planByteArray,
-          splitInfos.toArray
-        )
-    }
+    val conf = SQLConf.get
+    val enabled = conf.getConfString(SharedPlanPayload.enabledKey, "false").toBoolean
+    val minBytes = conf.getConfString(SharedPlanPayload.minBytesKey, "262144").toLong
+    SharedPlanPayload.partitions(
+      if (enabled && planByteArray.length >= minBytes && splitInfos.nonEmpty)
+        org.apache.spark.sql.SparkSession.active.sparkContext
+      else null,
+      planByteArray,
+      splitInfos.map(_.toArray),
+      enabled,
+      minBytes
+    )
   }
 
   private def getPartitionedFileInfo(
@@ -232,9 +236,12 @@ class VeloxIteratorApi extends IteratorApi with Logging {
       inputIterators: Seq[Iterator[ColumnarBatch]] = Seq(),
       enableCudf: Boolean = false,
       wsContext: WholeStageTransformContext = null): Iterator[ColumnarBatch] = {
-    assert(
-      inputPartition.isInstanceOf[GlutenPartition],
-      "Velox backend only accept GlutenPartition.")
+    val partitionSplitInfos = inputPartition match {
+      case partition: GlutenPartition => partition.splitInfos
+      case partition: SharedPlanGlutenPartition => partition.splitInfos
+      case other => throw new IllegalArgumentException(
+          s"Velox backend received unsupported partition: ${other.getClass.getName}")
+    }
 
     val columnarNativeIterators = inputIterators.map {
       iter => new ColumnarBatchInIterator(BackendsApiManager.getBackendName, iter.asJava)
@@ -243,9 +250,7 @@ class VeloxIteratorApi extends IteratorApi with Logging {
     val extraConf = Map(GlutenConfig.COLUMNAR_CUDF_ENABLED.key -> enableCudf.toString).asJava
     val transKernel = NativePlanEvaluator.create(BackendsApiManager.getBackendName, extraConf)
 
-    val splitInfoByteArray = inputPartition
-      .asInstanceOf[GlutenPartition]
-      .splitInfos
+    val splitInfoByteArray = partitionSplitInfos
       .map(splitInfo => splitInfo.toProtobuf.toByteArray)
       .toArray
     val spillDirPath = SparkDirectoryUtil
