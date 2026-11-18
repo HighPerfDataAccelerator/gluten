@@ -47,6 +47,41 @@ inline void gatherFixedWidth(
       }
       return;
     }
+    // Vera has 128-bit SVE vectors. Use fixed loop strides on this target
+    // and overlap the two independent gathers in each iteration.
+    if (svcntb() == 16) {
+      const auto* indices = rowIds;
+      auto* output = dst;
+      if constexpr (std::is_same_v<T, uint32_t>) {
+        const auto all = svptrue_b32();
+        const auto* blockEnd = rowIds + (size & ~uint32_t{7});
+        for (; indices < blockEnd; indices += 8, output += 8) {
+          const auto indices0 = svld1_u32(all, indices);
+          const auto indices1 = svld1_u32(all, indices + 4);
+          const auto values0 = svld1_gather_u32index_u32(all, src, indices0);
+          const auto values1 = svld1_gather_u32index_u32(all, src, indices1);
+          svst1_u32(all, output, values0);
+          svst1_u32(all, output + 4, values1);
+        }
+      } else {
+        const auto all = svptrue_b64();
+        const auto* data = reinterpret_cast<const uint64_t*>(src);
+        const auto* blockEnd = rowIds + (size & ~uint32_t{3});
+        for (; indices < blockEnd; indices += 4, output += 4) {
+          const auto indices0 = svld1uw_u64(all, indices);
+          const auto indices1 = svld1uw_u64(all, indices + 2);
+          const auto values0 = svld1_gather_u64index_u64(all, data, indices0);
+          const auto values1 = svld1_gather_u64index_u64(all, data, indices1);
+          svst1_u64(all, reinterpret_cast<uint64_t*>(output), values0);
+          svst1_u64(all, reinterpret_cast<uint64_t*>(output + 2), values1);
+        }
+      }
+      const auto* end = rowIds + size;
+      for (; indices < end; ++indices, ++output) {
+        *output = src[*indices];
+      }
+      return;
+    }
     if constexpr (std::is_same_v<T, uint32_t>) {
       const auto lanes = svcntw();
       const auto all = svptrue_b32();
