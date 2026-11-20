@@ -39,6 +39,9 @@
 #include <x86intrin.h>
 #elif defined(__aarch64__)
 #include <arm_neon.h>
+#if defined(__ARM_FEATURE_SVE)
+#include <arm_sve.h>
+#endif
 #endif
 
 #include "memory/ArrowMemoryPool.h"
@@ -772,6 +775,30 @@ arrow::Status VeloxHashShuffleWriter::splitValidityBuffer(const facebook::velox:
   return arrow::Status::OK();
 }
 
+namespace {
+// Copy a variable-width value without reading or writing beyond its length.
+inline void copyBinaryPayload(uint8_t* dest, const char* value, size_t length) {
+#if defined(__aarch64__) && defined(__ARM_FEATURE_SVE)
+  const auto* src = reinterpret_cast<const uint8_t*>(value);
+  const auto lanes = svcntb();
+  if (length <= lanes) {
+    const auto active = svwhilelt_b8_u64(0, length);
+    svst1_u8(active, dest, svld1_u8(active, src));
+    return;
+  }
+  if (length <= 2 * lanes) {
+    const auto all = svptrue_b8();
+    const auto first = svld1_u8(all, src);
+    const auto last = svld1_u8(all, src + length - lanes);
+    svst1_u8(all, dest, first);
+    svst1_u8(all, dest + length - lanes, last);
+    return;
+  }
+#endif
+  gluten::fastCopy(dest, value, length);
+}
+} // namespace
+
 arrow::Status VeloxHashShuffleWriter::splitBinaryType(
     uint32_t binaryIdx,
     const facebook::velox::FlatVector<facebook::velox::StringView>& src,
@@ -794,6 +821,15 @@ arrow::Status VeloxHashShuffleWriter::splitBinaryType(
     auto multiply = 1;
 
     for (auto i = 0; i < numRows; i++) {
+#if defined(__aarch64__) && defined(__ARM_FEATURE_SVE)
+      // Full batches on Vera have enough independent StringViews to hide the
+      // indexed load latency. The lookahead stays inside this partition.
+      constexpr uint32_t kPrefetchDistance = 8;
+      if (src.size() >= 8192 && numRows - i > kPrefetchDistance) {
+        const auto nextRow = rowOffset2RowId_[rowOffsetBase + i + kPrefetchDistance];
+        PREFETCHT0(srcRawValues + nextRow);
+      }
+#endif
       auto rowId = rowOffset2RowId_[rowOffsetBase + i];
       auto& stringView = srcRawValues[rowId];
       size_t isNull = srcRawNulls && facebook::velox::bits::isBitNull(srcRawNulls, rowId);
@@ -825,7 +861,7 @@ arrow::Status VeloxHashShuffleWriter::splitBinaryType(
       }
 
       // 2. copy value
-      gluten::fastCopy(dstValuePtr, stringView.data(), stringLen);
+      copyBinaryPayload(dstValuePtr, stringView.data(), stringLen);
 
       dstValuePtr += stringLen;
     }
