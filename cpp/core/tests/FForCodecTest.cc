@@ -410,6 +410,32 @@ TEST(FForTest, Compress64MisalignedOutput) {
   }
 }
 
+TEST(FForTest, FullBlockPackedWidthsMatchGenericWireFormat) {
+  std::mt19937_64 rng(74);
+  for (unsigned width : {0u, 8u, 16u, 32u, 64u}) {
+    const uint64_t mask = width == 64 ? UINT64_MAX : (uint64_t{1} << width) - 1;
+    const uint64_t base = UINT64_MAX - mask;
+    std::vector<uint64_t> data(kMaxValuesPerBlock);
+    for (auto& value : data) {
+      value = base + (rng() & mask);
+    }
+    data.front() = base;
+    data.back() = base + mask;
+    std::vector<uint64_t> expected(compress64Bound(data.size()) / sizeof(uint64_t) + 1);
+    const auto blockBytes = encodeBlock(data.data(), data.size(), expected.data());
+    auto* wire = reinterpret_cast<uint8_t*>(expected.data());
+    writeHeader(wire + blockBytes, kBwTailMarker, 0, 0);
+    const auto bytes = blockBytes + kHeaderSize;
+    for (size_t offset = 0; offset < 8; ++offset) {
+      std::vector<uint8_t> output(bytes + 8, 0xaf);
+      auto* dst = output.data() + offset;
+      ASSERT_EQ(compress64(data.data(), data.size(), dst), bytes);
+      EXPECT_EQ(std::memcmp(wire, dst, bytes), 0) << "width=" << width << " offset=" << offset;
+      EXPECT_EQ(dst[bytes], 0xaf);
+    }
+  }
+}
+
 TEST(FForTest, Compress64MisalignedInput) {
   auto raw = genData(256, 1000, 99);
   std::vector<uint8_t> inputBuf(256 * sizeof(uint64_t) + 16);
