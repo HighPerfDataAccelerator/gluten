@@ -50,6 +50,10 @@
 
 #pragma once
 
+#if defined(__aarch64__) && defined(__ARM_NEON) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+#include <arm_neon.h>
+#endif
+
 #include <algorithm>
 #include <array>
 #include <cstddef>
@@ -383,6 +387,38 @@ inline size_t decodeBlock(const uint64_t* in, size_t inBytes, size_t blockVals, 
   return totalBytes;
 }
 
+#if defined(__aarch64__) && defined(__ARM_NEON) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+// Each packed word holds the same lane from successive groups of four.
+template <unsigned Width, unsigned Shift = 0>
+inline void packWord(const uint64_t* src, uint64x2_t base, uint64x2_t& low, uint64x2_t& high) {
+  const auto a = vsubq_u64(vld1q_u64(src), base);
+  const auto b = vsubq_u64(vld1q_u64(src + 2), base);
+  if constexpr (Shift == 0) {
+    low = a;
+    high = b;
+  } else {
+    low = vsliq_n_u64(low, a, Shift);
+    high = vsliq_n_u64(high, b, Shift);
+  }
+  if constexpr (Shift + Width < 64) {
+    packWord<Width, Shift + Width>(src + kLanes, base, low, high);
+  }
+}
+
+template <unsigned Width>
+inline void packFullBlock(const uint64_t* src, uint8_t* dst, uint64_t base) {
+  const auto frame = vdupq_n_u64(base);
+  constexpr unsigned step = (64 / Width) * kLanes;
+  for (unsigned i = 0; i < kMaxValuesPerBlock; i += step) {
+    uint64x2_t low, high;
+    packWord<Width>(src + i, frame, low, high);
+    vst1q_u8(dst, vreinterpretq_u8_u64(low));
+    vst1q_u8(dst + 16, vreinterpretq_u8_u64(high));
+    dst += 32;
+  }
+}
+#endif
+
 // Template-based compress/decompress with alignment dispatch.
 // InAligned:  true if input  (const uint64_t*) is 8-byte aligned.
 // OutAligned: true if output (uint8_t*) is 8-byte aligned.
@@ -411,13 +447,51 @@ inline size_t compress64Impl(const uint64_t* input, size_t num, uint8_t* output)
       src = tmpIn;
     }
 
-    if constexpr (OutAligned) {
-      outPtr += encodeBlock(src, blockVals, reinterpret_cast<uint64_t*>(outPtr));
+#if defined(__aarch64__) && defined(__ARM_NEON) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+    if (blockVals == kMaxValuesPerBlock) {
+      uint64_t base;
+      unsigned bw;
+      analyze(src, blockVals, base, bw);
+      writeHeader(outPtr, static_cast<uint8_t>(bw), static_cast<uint8_t>(blockVals / kLanes), base);
+      outPtr += kHeaderSize;
+      const size_t words = compressedWords(blockVals, bw);
+      switch (bw) {
+        case 0:
+          break;
+        case 8:
+          packFullBlock<8>(src, outPtr, base);
+          break;
+        case 16:
+          packFullBlock<16>(src, outPtr, base);
+          break;
+        case 32:
+          packFullBlock<32>(src, outPtr, base);
+          break;
+        case 64:
+          packFullBlock<64>(src, outPtr, base);
+          break;
+        default:
+          if constexpr (OutAligned) {
+            encodeRt(src, reinterpret_cast<uint64_t*>(outPtr), base, blockVals, bw);
+          } else {
+            encodeRt(src, tmpOut, base, blockVals, bw);
+            std::memcpy(outPtr, tmpOut, words * sizeof(uint64_t));
+          }
+      }
+      outPtr += words * sizeof(uint64_t);
     } else {
-      const size_t produced = encodeBlock(src, blockVals, tmpOut);
-      std::memcpy(outPtr, tmpOut, produced);
-      outPtr += produced;
+#endif
+      if constexpr (OutAligned) {
+        outPtr += encodeBlock(src, blockVals, reinterpret_cast<uint64_t*>(outPtr));
+      } else {
+        const size_t produced = encodeBlock(src, blockVals, tmpOut);
+        std::memcpy(outPtr, tmpOut, produced);
+        outPtr += produced;
+      }
+
+#if defined(__aarch64__) && defined(__ARM_NEON) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
     }
+#endif
 
     inPtr += blockVals;
     remaining -= blockVals;
