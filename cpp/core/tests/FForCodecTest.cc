@@ -210,6 +210,51 @@ TEST(FForTest, CompressedSize) {
 
 // compress64 / decompress64 tests
 
+TEST(FForTest, DecodeFullBlockAtByteOffsets) {
+  constexpr size_t count = kMaxValuesPerBlock;
+  constexpr uint64_t base = UINT64_C(0xfedcba9876543210);
+  std::mt19937_64 rng(42);
+  for (unsigned width = 0; width <= 64; ++width) {
+    std::vector<uint64_t> wire(2 + compressedWords(count, width));
+    writeHeader(reinterpret_cast<uint8_t*>(wire.data()), width, count / kLanes, base);
+    std::generate(wire.begin() + 2, wire.end(), [&] { return rng(); });
+    const size_t bytes = wire.size() * sizeof(uint64_t);
+    std::array<uint64_t, count> expected;
+    ASSERT_EQ(decodeBlock(wire.data(), bytes, count, expected.data()), bytes);
+
+    for (size_t offset = 0; offset < sizeof(uint64_t); ++offset) {
+      SCOPED_TRACE(::testing::Message() << "width " << width << " offset " << offset);
+      std::vector<uint8_t> frame(bytes + offset);
+      auto* input = frame.data() + offset;
+      std::memcpy(input, wire.data(), bytes);
+      for (size_t unit : {sizeof(uint32_t), sizeof(uint64_t)}) {
+        const size_t outputOffset = 8 - offset;
+        std::vector<uint8_t> output(outputOffset + count * unit + 1, 0xa5);
+        auto* dest = output.data() + outputOffset;
+        auto decodeFrame = [&](size_t size) {
+          if (unit == sizeof(uint32_t)) {
+            return decompress32(input, size, dest, count * unit);
+          }
+          return decompress64(input, size, reinterpret_cast<uint64_t*>(dest), count * unit);
+        };
+        ASSERT_EQ(decodeFrame(bytes - 1), 0);
+        ASSERT_TRUE(std::all_of(output.begin(), output.end(), [](uint8_t value) { return value == 0xa5; }));
+        ASSERT_EQ(decodeFrame(bytes), count);
+        for (size_t i = 0; i < count; ++i) {
+          if (unit == sizeof(uint32_t)) {
+            const uint32_t value = static_cast<uint32_t>(expected[i]);
+            ASSERT_EQ(std::memcmp(dest + i * unit, &value, unit), 0);
+          } else {
+            ASSERT_EQ(std::memcmp(dest + i * unit, &expected[i], unit), 0);
+          }
+        }
+        ASSERT_EQ(output[outputOffset - 1], 0xa5);
+        ASSERT_EQ(output.back(), 0xa5);
+      }
+    }
+  }
+}
+
 TEST(FForTest, Compress64Basic) {
   auto data = genData(256, 1000, 99);
   compressRoundtrip(data.data(), data.size());

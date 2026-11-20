@@ -50,6 +50,10 @@
 
 #pragma once
 
+#if defined(__aarch64__) && defined(__ARM_NEON) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+#include <arm_neon.h>
+#endif
+
 #include <algorithm>
 #include <array>
 #include <cstddef>
@@ -451,6 +455,156 @@ inline size_t compress64(const uint64_t* input, size_t num, uint8_t* output) {
   return compress64Impl<false, false>(input, num, output);
 }
 
+#if defined(__aarch64__) && defined(__ARM_NEON) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+// FFOR stores four independent bit streams in 32-byte stripes. Decode into
+// the caller's byte buffer, including when the shuffle frame is unaligned.
+namespace detail {
+inline uint64x2_t readWordPair(const uint8_t* input) {
+  return vreinterpretq_u64_u8(vld1q_u8(input));
+}
+
+template <bool narrow>
+inline void storeFour(uint8_t* output, uint64x2_t lo, uint64x2_t hi, uint64_t base) {
+  if constexpr (narrow) {
+    const auto values = vuzp1q_u32(vreinterpretq_u32_u64(lo), vreinterpretq_u32_u64(hi));
+    const auto bias = vdupq_n_u32(static_cast<uint32_t>(base));
+    vst1q_u8(output, vreinterpretq_u8_u32(vaddq_u32(values, bias)));
+  } else {
+    const auto bias = vdupq_n_u64(base);
+    vst1q_u8(output, vreinterpretq_u8_u64(vaddq_u64(lo, bias)));
+    vst1q_u8(output + 16, vreinterpretq_u8_u64(vaddq_u64(hi, bias)));
+  }
+}
+
+template <bool narrow, unsigned BW, size_t group>
+inline void unpackGroup(const uint8_t* input, uint8_t* output, uint64_t base) {
+  constexpr unsigned shift = (group * BW) % 64;
+  constexpr unsigned word = group * BW / 64;
+  const auto* stripe = input + word * 32;
+  uint64x2_t lo = readWordPair(stripe);
+  uint64x2_t hi = readWordPair(stripe + 16);
+  if constexpr (shift != 0) {
+    lo = vshrq_n_u64(lo, shift);
+    hi = vshrq_n_u64(hi, shift);
+    if constexpr (shift + BW > 64) {
+      lo = vsliq_n_u64(lo, readWordPair(stripe + 32), 64 - shift);
+      hi = vsliq_n_u64(hi, readWordPair(stripe + 48), 64 - shift);
+    }
+  }
+  const auto mask = vdupq_n_u64(bitmask<BW>());
+  storeFour<narrow>(output + group * (narrow ? 16 : 32), vandq_u64(lo, mask), vandq_u64(hi, mask), base);
+}
+
+template <bool narrow, unsigned BW, size_t... groups>
+inline void unpackPeriod(
+    const uint8_t* input,
+    uint8_t* output,
+    uint64_t base,
+    std::index_sequence<groups...>) {
+  (unpackGroup<narrow, BW, groups>(input, output, base), ...);
+}
+
+template <bool narrow, unsigned BW>
+inline void unpackFull(const uint8_t* input, uint8_t* output, uint64_t base) {
+  // Advance by the shortest group count that ends on a stripe boundary.
+  constexpr unsigned period = 64 / (BW & -BW);
+  for (unsigned group = 0; group < 64; group += period) {
+    unpackPeriod<narrow, BW>(input, output, base, std::make_index_sequence<period>{});
+    input += period * BW / 64 * 32;
+    output += period * (narrow ? 16 : 32);
+  }
+}
+
+template <bool narrow>
+inline bool unpackFullNeon(const uint8_t* header, size_t remaining, uint8_t* output, size_t& consumed) {
+  const unsigned width = header[0];
+  consumed = kHeaderSize + 32 * width;
+  if (consumed > remaining) {
+    return false;
+  }
+  uint64_t base;
+  std::memcpy(&base, header + 8, sizeof(base));
+  // Specialize the widths frequent in SF1000 shuffle frames on Vera.
+  switch (width) {
+    case 0:
+      for (size_t i = 0; i < 64; ++i) {
+        storeFour<narrow>(output + i * (narrow ? 16 : 32), vdupq_n_u64(0), vdupq_n_u64(0), base);
+      }
+      return true;
+    case 4:
+      unpackFull<narrow, 4>(header + kHeaderSize, output, base);
+      return true;
+    case 7:
+      unpackFull<narrow, 7>(header + kHeaderSize, output, base);
+      return true;
+    case 8:
+      unpackFull<narrow, 8>(header + kHeaderSize, output, base);
+      return true;
+    case 10:
+      unpackFull<narrow, 10>(header + kHeaderSize, output, base);
+      return true;
+    case 12:
+      unpackFull<narrow, 12>(header + kHeaderSize, output, base);
+      return true;
+    case 13:
+      unpackFull<narrow, 13>(header + kHeaderSize, output, base);
+      return true;
+    case 14:
+      unpackFull<narrow, 14>(header + kHeaderSize, output, base);
+      return true;
+    case 15:
+      unpackFull<narrow, 15>(header + kHeaderSize, output, base);
+      return true;
+    case 16:
+      unpackFull<narrow, 16>(header + kHeaderSize, output, base);
+      return true;
+    case 17:
+      unpackFull<narrow, 17>(header + kHeaderSize, output, base);
+      return true;
+    case 19:
+      unpackFull<narrow, 19>(header + kHeaderSize, output, base);
+      return true;
+    case 20:
+      unpackFull<narrow, 20>(header + kHeaderSize, output, base);
+      return true;
+    case 21:
+      unpackFull<narrow, 21>(header + kHeaderSize, output, base);
+      return true;
+    case 22:
+      unpackFull<narrow, 22>(header + kHeaderSize, output, base);
+      return true;
+    case 24:
+      unpackFull<narrow, 24>(header + kHeaderSize, output, base);
+      return true;
+    case 28:
+      unpackFull<narrow, 28>(header + kHeaderSize, output, base);
+      return true;
+    case 30:
+      unpackFull<narrow, 30>(header + kHeaderSize, output, base);
+      return true;
+    case 31:
+      unpackFull<narrow, 31>(header + kHeaderSize, output, base);
+      return true;
+    case 32:
+      unpackFull<narrow, 32>(header + kHeaderSize, output, base);
+      return true;
+    case 33:
+      unpackFull<narrow, 33>(header + kHeaderSize, output, base);
+      return true;
+    case 56:
+      unpackFull<narrow, 56>(header + kHeaderSize, output, base);
+      return true;
+    case 64:
+      unpackFull<narrow, 64>(header + kHeaderSize, output, base);
+      return true;
+    default:
+      return false;
+  }
+}
+} // namespace detail
+#endif
+
+
 // Template-based decompress with alignment dispatch.
 // decodeBlock requires aligned uint64_t* input; when the caller's input
 // buffer is unaligned, we stage through tmpIn and memcpy in.
@@ -480,6 +634,17 @@ inline size_t decompress64Impl(const uint8_t* input, size_t inputSize, uint64_t*
       break;
     }
     const size_t remaining = static_cast<size_t>(inEnd - inPtr);
+#if defined(__aarch64__) && defined(__ARM_NEON) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+    if (blockVals == kMaxValuesPerBlock) {
+      size_t bytes;
+      auto* dest = reinterpret_cast<uint8_t*>(output) + nDecoded * sizeof(uint64_t);
+      if (detail::unpackFullNeon<false>(inPtr, remaining, dest, bytes)) {
+        inPtr += bytes;
+        nDecoded += blockVals;
+        continue;
+      }
+    }
+#endif
     uint64_t* decDst = OutAligned ? output + nDecoded : tmpOut;
 
     size_t consumed;
@@ -768,6 +933,17 @@ inline size_t decompress32(const uint8_t* input, size_t inputSize, uint8_t* outp
       break;
     }
     const size_t remaining = static_cast<size_t>(inEnd - inPtr);
+#if defined(__aarch64__) && defined(__ARM_NEON) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+    if (blockVals == kMaxValuesPerBlock) {
+      size_t bytes;
+      auto* dest = output + nDecoded * sizeof(uint32_t);
+      if (detail::unpackFullNeon<true>(inPtr, remaining, dest, bytes)) {
+        inPtr += bytes;
+        nDecoded += blockVals;
+        continue;
+      }
+    }
+#endif
     const size_t n = std::min(remaining, sizeof(tmpIn));
     std::memcpy(tmpIn, inPtr, n);
     const size_t consumed = decodeBlock(tmpIn, n, blockVals, wide);
