@@ -182,11 +182,10 @@ object ReduceExistenceJoins extends Rule[LogicalPlan] with PredicateHelper {
       case IsNotNull(k: Attribute) => required.contains(k)
       case _ => false
     }
-    val (early, remaining) = extra.partition {
-      case IsNotNull(k: Attribute) => k.semanticEquals(s.probe)
-      case BloomFilterMightContain(sub: ScalarSubquery, XxHash64(Seq(k: Attribute), _)) =>
-        k.semanticEquals(
-          s.probe) && !sub.isCorrelated && sub.plan.deterministic && (sub.plan match {
+    def runtimeFilterOn(expression: Expression, key: Attribute): Boolean = expression match {
+      case BloomFilterMightContain(sub: ScalarSubquery, XxHash64(Seq(k: Attribute), _))
+          if k.semanticEquals(key) && !sub.isCorrelated && sub.plan.deterministic =>
+        sub.plan match {
           case agg: Aggregate if agg.groupingExpressions.isEmpty =>
             agg.aggregateExpressions match {
               case Seq(Alias(e: AggregateExpression, _)) =>
@@ -194,15 +193,37 @@ object ReduceExistenceJoins extends Rule[LogicalPlan] with PredicateHelper {
               case _ => false
             }
           case _ => false
-        })
+        }
       case _ => false
     }
-    val matched = Alias(
-      If(needed.reduceLeft(And), s.buildValue, Literal.create(null, s.buildValue.dataType)),
-      "_qualifying_value")()
+    val (early, remaining) = extra.partition {
+      case IsNotNull(k: Attribute) => k.semanticEquals(s.probe)
+      case e => runtimeFilterOn(e, s.probe)
+    }
     val keyFilters = (Seq(IsNotNull(s.build)) ++ early.map(translate)).distinct
     val kept = Filter(keyFilters.reduceLeft(And), all.leaf)
-    val projected = Project(Seq(s.build, s.buildValue, matched), kept)
+    val predicate = needed.reduceLeft(And)
+    // A value filter can eliminate groups but cannot be pushed onto their individual members.
+    // Keep every member of groups reached by the probe, including members with different values.
+    val (input, qualifies) = if (remaining.exists(runtimeFilterOn(_, s.probeValue))) {
+      val candidateKey = Alias(s.probe, "_candidate_group_key")()
+      val keys = Project(Seq(candidateKey), semi.left)
+      val flag = Alias(predicate, "_member_of_subset")()
+      val members = Project(Seq(s.build, s.buildValue, flag), kept)
+      val selected = Join(
+        members,
+        keys,
+        LeftSemi,
+        Some(EqualTo(s.build, candidateKey.toAttribute)),
+        JoinHint.NONE)
+      (selected, flag.toAttribute)
+    } else {
+      (kept, predicate)
+    }
+    val matched = Alias(
+      If(qualifies, s.buildValue, Literal.create(null, s.buildValue.dataType)),
+      "_qualifying_value")()
+    val projected = Project(Seq(s.build, s.buildValue, matched), input)
     val min = Alias(Min(s.buildValue).toAggregateExpression(), "_min")()
     val max = Alias(Max(s.buildValue).toAggregateExpression(), "_max")()
     val low = Alias(Min(matched.toAttribute).toAggregateExpression(), "_matching_low")()

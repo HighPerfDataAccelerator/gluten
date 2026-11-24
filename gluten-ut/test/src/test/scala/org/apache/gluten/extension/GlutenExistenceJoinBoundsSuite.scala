@@ -19,6 +19,10 @@ package org.apache.gluten.extension
 import org.apache.gluten.extension.columnar.ReduceExistenceJoins
 
 import org.apache.spark.sql.{QueryTest, Row}
+import org.apache.spark.sql.catalyst.expressions.{Alias, BloomFilterMightContain, ScalarSubquery, XxHash64}
+import org.apache.spark.sql.catalyst.expressions.aggregate.BloomFilterAggregate
+import org.apache.spark.sql.catalyst.plans.LeftSemi
+import org.apache.spark.sql.catalyst.plans.logical.{Aggregate, Filter, Join}
 import org.apache.spark.sql.test.SharedSparkSession
 
 class GlutenExistenceJoinBoundsSuite extends QueryTest with SharedSparkSession {
@@ -95,6 +99,28 @@ class GlutenExistenceJoinBoundsSuite extends QueryTest with SharedSparkSession {
             assert(compare(text, true).toSet == Set(Row("a", 5L), Row("b", 1L)))
             compare(text.replace("count(*)", "count(DISTINCT p.s)"), false)
             compare(text.replace("WHERE p.late", "WHERE NOT p.late"), false)
+            // The other supplier may fail the probe filter and still invalidate the order.
+            for (supplier <- Seq(1, 2, 99)) {
+              spark.experimental.extraStrategies = old
+              val expected =
+                spark.sql(text.replace("WHERE p.late", s"WHERE p.late AND p.s = $supplier"))
+                  .collect().toSeq
+              val source = spark.sql(s"SELECT $supplier AS s").queryExecution.optimizedPlan
+              val bits = new BloomFilterAggregate(new XxHash64(Seq(source.output.head)))
+              val lookup = ScalarSubquery(
+                Aggregate(Nil, Seq(Alias(bits.toAggregateExpression(), "keys")()), source),
+                Nil)
+              val input = spark.sql(text).queryExecution.optimizedPlan.transformUp {
+                case j: Join if j.joinType == LeftSemi =>
+                  val value = j.left.output.find(_.name == "s").get
+                  j.copy(left =
+                    Filter(BloomFilterMightContain(lookup, new XxHash64(Seq(value))), j.left))
+              }
+              spark.experimental.extraStrategies = old :+ ReduceExistenceJoins.FoldExistenceCounts
+              val plan = spark.sessionState.executePlan(input).executedPlan
+              assert(plan.executeCollectPublic().toSeq == expected)
+              assert(plan.toString.contains("_candidate_group_key"))
+            }
           } finally {
             spark.experimental.extraStrategies = old
           }
