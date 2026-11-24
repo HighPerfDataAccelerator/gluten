@@ -38,10 +38,14 @@ object GlutenConfigUtil {
   }
 
   def parseConfig(conf: Map[String, String]): Map[String, String] = {
-    val (glutenConf, otherConf) = conf.partition(_._1.startsWith("spark.gluten."))
-    val provider = new MapProvider(glutenConf)
-    val parsedConf = glutenConf.map { case (k, v) => (k, getConfString(provider, k, v)) }
-    parsedConf ++ otherConf
+    val prefix = "spark.gluten."
+    val provider: GlutenConfigProvider = key => if (key.startsWith(prefix)) conf.get(key) else None
+    conf.foldLeft(conf) {
+      case (parsed, (key, value)) if key.startsWith(prefix) =>
+        val normalized = getConfString(provider, key, value)
+        if (normalized == value) parsed else parsed.updated(key, normalized)
+      case (parsed, _) => parsed
+    }
   }
 
   def mapByteConfValue(conf: Map[String, String], key: String, unit: ByteUnit)(
