@@ -374,12 +374,31 @@ object ExpressionMappings {
     partitionExpressionMapByBlacklist._2
   }
 
+  final private class PartitionedMappings(
+      val blacklist: Set[String],
+      val extras: Vector[Sig],
+      val maps: (Map[Class[_], String], Map[Class[_], String]))
+
+  // Sessions may plan concurrently with different blacklists or backend mappings.
+  @volatile private var lastMappings: PartitionedMappings = _
+
   private def partitionExpressionMapByBlacklist: (Map[Class[_], String], Map[Class[_], String]) = {
     val blacklist = GlutenConfig.get.expressionBlacklist
-    val (blacklistedExpr, filteredExpr) = (defaultExpressionsMap ++ toMap(
-      BackendsApiManager.getSparkPlanExecApiInstance.extraExpressionMappings)).partition(
-      kv => blacklist.contains(kv._2))
-    (blacklistedExpr, filteredExpr)
+    val extras = BackendsApiManager.getSparkPlanExecApiInstance.extraExpressionMappings
+    val cached = lastMappings
+    if (cached != null && cached.blacklist == blacklist && cached.extras == extras) {
+      cached.maps
+    } else {
+      val snapshot = extras.toVector
+      val all = defaultExpressionsMap ++ toMap(snapshot)
+      val maps = if (blacklist.isEmpty) {
+        (Map.empty[Class[_], String], all)
+      } else {
+        all.partition { case (_, name) => blacklist.contains(name) }
+      }
+      lastMappings = new PartitionedMappings(blacklist, snapshot, maps)
+      maps
+    }
   }
 
   // This is needed when generating function support status documentation for Spark built-in
