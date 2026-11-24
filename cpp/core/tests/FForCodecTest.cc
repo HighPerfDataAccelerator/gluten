@@ -436,6 +436,36 @@ TEST(FForTest, FullBlockPackedWidthsMatchGenericWireFormat) {
   }
 }
 
+TEST(FForTest, FullInt32BlockMatchesGenericWireFormat) {
+  std::mt19937 rng(381);
+  for (unsigned width = 0; width <= 32; ++width) {
+    const uint32_t mask = width == 32 ? UINT32_MAX : (uint32_t{1} << width) - 1;
+    const uint32_t base = UINT32_MAX - mask;
+    std::vector<uint64_t> wide(kMaxValuesPerBlock);
+    for (auto& value : wide) {
+      value = base + (rng() & mask);
+    }
+    wide.front() = base;
+    wide.back() = UINT32_MAX;
+    std::vector<uint64_t> reference(compress64Bound(wide.size()) / sizeof(uint64_t) + 1);
+    const auto blockBytes = encodeBlock(wide.data(), wide.size(), reference.data());
+    auto* wire = reinterpret_cast<uint8_t*>(reference.data());
+    writeHeader(wire + blockBytes, kBwTailMarker, 0, 0);
+    const auto size = blockBytes + kHeaderSize;
+    for (size_t offset = 0; offset < 8; ++offset) {
+      std::vector<uint8_t> input(offset + wide.size() * sizeof(uint32_t));
+      for (size_t i = 0; i < wide.size(); ++i) {
+        const auto value = static_cast<uint32_t>(wide[i]);
+        std::memcpy(input.data() + offset + i * sizeof(value), &value, sizeof(value));
+      }
+      std::vector<uint8_t> output(offset + size + 1, 0xA5);
+      ASSERT_EQ(compress32(input.data() + offset, wide.size(), output.data() + offset), size);
+      ASSERT_EQ(std::memcmp(output.data() + offset, wire, size), 0) << width << " " << offset;
+      ASSERT_EQ(output.back(), 0xA5);
+    }
+  }
+}
+
 TEST(FForTest, Compress64MisalignedInput) {
   auto raw = genData(256, 1000, 99);
   std::vector<uint8_t> inputBuf(256 * sizeof(uint64_t) + 16);

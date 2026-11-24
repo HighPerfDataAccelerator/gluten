@@ -783,6 +783,79 @@ inline constexpr size_t compress32Bound(size_t numValues) {
   return (nBlocks + 1) * (kHeaderSize + kLanes * sizeof(uint64_t)) + numValues * sizeof(uint32_t);
 }
 
+#if defined(__aarch64__) && defined(__ARM_NEON) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+inline uint32x4_t load32x4(const uint8_t* input) {
+  return vreinterpretq_u32_u8(vld1q_u8(input));
+}
+
+// Form four lane words at a time, one low or high half per lane.
+template <unsigned Width, unsigned Shift = 0>
+inline uint32x4_t packHalf32(const uint8_t* src, uint32x4_t base, uint32x4_t packed) {
+  const auto delta = vsubq_u32(load32x4(src), base);
+  if constexpr (Shift == 0) {
+    packed = delta;
+  } else {
+    packed = vsliq_n_u32(packed, delta, Shift);
+  }
+  if constexpr (Shift + Width < 32) {
+    return packHalf32<Width, Shift + Width>(src + 16, base, packed);
+  } else {
+    return packed;
+  }
+}
+
+template <unsigned Width>
+inline void packFull32(const uint8_t* src, uint8_t* dst, uint32_t base) {
+  const auto frame = vdupq_n_u32(base);
+  constexpr size_t halfBytes = (32 / Width) * 16;
+  for (size_t i = 0; i < kMaxValuesPerBlock * sizeof(uint32_t); i += 2 * halfBytes) {
+    const auto lo = packHalf32<Width>(src + i, frame, vdupq_n_u32(0));
+    const auto hi = packHalf32<Width>(src + i + halfBytes, frame, vdupq_n_u32(0));
+    vst1q_u8(dst, vreinterpretq_u8_u32(vzip1q_u32(lo, hi)));
+    vst1q_u8(dst + 16, vreinterpretq_u8_u32(vzip2q_u32(lo, hi)));
+    dst += 32;
+  }
+}
+
+inline size_t encodeFull32(const uint8_t* src, uint8_t* dst, uint64_t* wide, uint64_t* scratch) {
+  auto minimum = load32x4(src);
+  auto maximum = minimum;
+  for (size_t i = kLanes; i < kMaxValuesPerBlock; i += kLanes) {
+    const auto values = load32x4(src + i * sizeof(uint32_t));
+    minimum = vminq_u32(minimum, values);
+    maximum = vmaxq_u32(maximum, values);
+  }
+  const uint32_t base = vminvq_u32(minimum);
+  const uint32_t range = vmaxvq_u32(maximum) - base;
+  const unsigned width = range == 0 ? 0 : 32 - __builtin_clz(range);
+  writeHeader(dst, width, kMaxValuesPerBlock / kLanes, base);
+  const size_t bytes = compressedWords(kMaxValuesPerBlock, width) * sizeof(uint64_t);
+  dst += kHeaderSize;
+  switch (width) {
+    case 0:
+      break;
+    case 8:
+      packFull32<8>(src, dst, base);
+      break;
+    case 16:
+      packFull32<16>(src, dst, base);
+      break;
+    case 32:
+      packFull32<32>(src, dst, base);
+      break;
+    default:
+      for (size_t i = 0; i < kMaxValuesPerBlock; i += kLanes) {
+        const auto values = load32x4(src + i * sizeof(uint32_t));
+        vst1q_u64(wide + i, vmovl_u32(vget_low_u32(values)));
+        vst1q_u64(wide + i + 2, vmovl_high_u32(values));
+      }
+      encodeRt(wide, scratch, base, kMaxValuesPerBlock, width);
+      std::memcpy(dst, scratch, bytes);
+  }
+  return kHeaderSize + bytes;
+}
+#endif
+
 inline size_t compress32(const uint8_t* input, size_t numValues, uint8_t* output) {
   alignas(64) uint32_t narrow[kMaxValuesPerBlock];
   alignas(64) uint64_t wide[kMaxValuesPerBlock];
@@ -791,6 +864,13 @@ inline size_t compress32(const uint8_t* input, size_t numValues, uint8_t* output
   uint8_t* outPtr = output;
   size_t remaining = numValues;
   const uint8_t* inPtr = input;
+#if defined(__aarch64__) && defined(__ARM_NEON) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+  while (remaining >= kMaxValuesPerBlock) {
+    outPtr += encodeFull32(inPtr, outPtr, wide, tmpOut);
+    inPtr += kMaxValuesPerBlock * sizeof(uint32_t);
+    remaining -= kMaxValuesPerBlock;
+  }
+#endif
   while (remaining >= kLanes) {
     size_t blockVals = remaining - (remaining % kLanes);
     if (blockVals > kMaxValuesPerBlock) {
