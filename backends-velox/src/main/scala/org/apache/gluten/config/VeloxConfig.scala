@@ -44,6 +44,7 @@ class VeloxConfig(conf: SQLConf) extends GlutenConfig(conf) {
   def runtimeBloomSelectiveKeysMaxFilters: Int = getConf(RUNTIME_BLOOM_SELECTIVE_KEYS_MAX_FILTERS)
   def runtimeBloomSemiJoinEnabled: Boolean = getConf(RUNTIME_BLOOM_SEMI_JOIN_ENABLED)
   def runtimeBloomSemiJoinMaxFilters: Int = getConf(RUNTIME_BLOOM_SEMI_JOIN_MAX_FILTERS)
+  def reorderFilteredCompoundJoinEnabled: Boolean = getConf(REORDER_FILTERED_COMPOUND_JOIN_ENABLED)
   def dimensionBridgeEnabled: Boolean = getConf(DIMENSION_BRIDGE_ENABLED)
   def dimensionBridgeFactMinBytes: Long = getConf(DIMENSION_BRIDGE_FACT_MIN_BYTES)
   def dimensionBridgeDimensionMaxBytes: Long = getConf(DIMENSION_BRIDGE_DIMENSION_MAX_BYTES)
@@ -252,6 +253,12 @@ object VeloxConfig extends ConfigRegistry {
       .intConf.checkValue(
         v => v >= 0 && v <= 10,
         "Must be between zero and ten").createWithDefault(2)
+  val REORDER_FILTERED_COMPOUND_JOIN_ENABLED =
+    buildConf("spark.gluten.sql.columnar.backend.velox.joinReorder.filteredCompound.enabled")
+      .doc("Join an unfiltered dimension to the smaller input of a compound inner join when both inputs share a runtime Bloom filter.")
+      .booleanConf
+      .createWithDefault(true)
+
   val DIMENSION_BRIDGE_ENABLED =
     buildConf("spark.gluten.sql.columnar.backend.velox.joinReorder.dimensionBridge.enabled")
       .doc("Join two large inner-join inputs with their small bridging dimensions first when the dimensions are related by an extra equality, so that equality becomes part of the large join key. Disabled by default.")
