@@ -31,6 +31,8 @@ import java.util.concurrent.TimeUnit
 class VeloxConfig(conf: SQLConf) extends GlutenConfig(conf) {
   import VeloxConfig._
 
+  def reuseScalarHavingKeysEnabled: Boolean = getConf(REUSE_SCALAR_HAVING_KEYS_ENABLED)
+
   def reuseFilteredFinalAggregateEnabled: Boolean = getConf(REUSE_FILTERED_FINAL_AGGREGATE_ENABLED)
 
   def runtimeBloomCascadeEnabled: Boolean = getConf(RUNTIME_BLOOM_CASCADE_ENABLED)
@@ -204,6 +206,12 @@ object VeloxConfig extends ConfigRegistry {
       .intConf
       .checkValue(v => v >= 0 && v <= 32, "Must be between0and32")
       .createWithDefault(0)
+
+  val REUSE_SCALAR_HAVING_KEYS_ENABLED =
+    buildConf("spark.gluten.sql.columnar.backend.velox.reuseScalarHavingKeys.enabled")
+      .doc("Share repeated grouping keys after an exact joined aggregate is filtered by a scalar MIN or MAX. Requires Spark exchange and subquery reuse.")
+      .booleanConf
+      .createWithDefault(true)
 
   val REUSE_FILTERED_FINAL_AGGREGATE_ENABLED =
     buildConf("spark.gluten.sql.columnar.backend.velox.reuseFilteredFinalAggregate.enabled")
