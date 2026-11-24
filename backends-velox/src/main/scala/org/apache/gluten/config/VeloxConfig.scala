@@ -44,6 +44,7 @@ class VeloxConfig(conf: SQLConf) extends GlutenConfig(conf) {
   def runtimeBloomSelectiveKeysMaxFilters: Int = getConf(RUNTIME_BLOOM_SELECTIVE_KEYS_MAX_FILTERS)
   def runtimeBloomSemiJoinEnabled: Boolean = getConf(RUNTIME_BLOOM_SEMI_JOIN_ENABLED)
   def runtimeBloomSemiJoinMaxFilters: Int = getConf(RUNTIME_BLOOM_SEMI_JOIN_MAX_FILTERS)
+  def reuseGroupedDecimalSumEnabled: Boolean = getConf(REUSE_GROUPED_DECIMAL_SUM_ENABLED)
   def dimensionBridgeEnabled: Boolean = getConf(DIMENSION_BRIDGE_ENABLED)
   def dimensionBridgeFactMinBytes: Long = getConf(DIMENSION_BRIDGE_FACT_MIN_BYTES)
   def dimensionBridgeDimensionMaxBytes: Long = getConf(DIMENSION_BRIDGE_DIMENSION_MAX_BYTES)
@@ -252,6 +253,12 @@ object VeloxConfig extends ConfigRegistry {
       .intConf.checkValue(
         v => v >= 0 && v <= 10,
         "Must be between zero and ten").createWithDefault(2)
+  val REUSE_GROUPED_DECIMAL_SUM_ENABLED =
+    buildConf("spark.gluten.sql.columnar.backend.velox.reuseGroupedDecimalSum.enabled")
+      .doc("Reuse a qualifying decimal subtotal when a grouped membership join and an outer sum read the same fact rows.")
+      .booleanConf
+      .createWithDefault(true)
+
   val DIMENSION_BRIDGE_ENABLED =
     buildConf("spark.gluten.sql.columnar.backend.velox.joinReorder.dimensionBridge.enabled")
       .doc("Join two large inner-join inputs with their small bridging dimensions first when the dimensions are related by an extra equality, so that equality becomes part of the large join key. Disabled by default.")
