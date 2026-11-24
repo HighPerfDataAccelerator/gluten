@@ -209,7 +209,8 @@ object VeloxConfig extends ConfigRegistry {
 
   val REUSE_SCALAR_HAVING_KEYS_ENABLED =
     buildConf("spark.gluten.sql.columnar.backend.velox.reuseScalarHavingKeys.enabled")
-      .doc("Share repeated grouping keys after an exact joined aggregate is filtered by a scalar MIN or MAX. Requires Spark exchange and subquery reuse.")
+      .doc("Share repeated grouping keys after an exact joined aggregate is " +
+        "filtered by a scalar MIN or MAX. Requires Spark exchange and subquery reuse.")
       .booleanConf
       .createWithDefault(true)
 
