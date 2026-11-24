@@ -149,7 +149,7 @@ object ShareGroupedThreshold extends Rule[LogicalPlan] {
       !conf.exchangeReuseEnabled || !conf.adaptiveExecutionEnabled ||
       !new VeloxConfig(conf).shareGroupedThresholdEnabled || plan.isStreaming
     ) return plan
-    plan.transformUp {
+    ShareScalarSumInput(plan, conf.autoBroadcastJoinThreshold).transformUp {
       case w: WithCTE if w.resolved && !w.plan.exists(_.isInstanceOf[SharedGroupingInput]) =>
         val defs = w.cteDefs.map(d => d.id -> underlying(d.child)).toMap
         val keys = w.plan.collect {

@@ -219,7 +219,7 @@ object VeloxConfig extends ConfigRegistry {
       .booleanConf.createWithDefault(false)
   val SHARE_GROUPED_THRESHOLD_ENABLED =
     buildConf("spark.gluten.sql.columnar.backend.velox.shareGroupedThreshold.enabled")
-      .doc("Share a grouped inner join between a filtered rollup and its scalar average threshold.")
+      .doc("Share join input between a grouped decimal sum and its scalar sum threshold, or a grouped result between a filtered rollup and its scalar average threshold.")
       .booleanConf
       .createWithDefault(true)
 
