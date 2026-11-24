@@ -31,6 +31,8 @@ import java.util.concurrent.TimeUnit
 class VeloxConfig(conf: SQLConf) extends GlutenConfig(conf) {
   import VeloxConfig._
 
+  def propagateJoinBloomFilterEnabled: Boolean = getConf(PROPAGATE_JOIN_BLOOM_FILTER_ENABLED)
+
   def reuseFilteredFinalAggregateEnabled: Boolean = getConf(REUSE_FILTERED_FINAL_AGGREGATE_ENABLED)
 
   def runtimeBloomCascadeEnabled: Boolean = getConf(RUNTIME_BLOOM_CASCADE_ENABLED)
@@ -204,6 +206,12 @@ object VeloxConfig extends ConfigRegistry {
       .intConf
       .checkValue(v => v >= 0 && v <= 32, "Must be between0and32")
       .createWithDefault(0)
+
+  val PROPAGATE_JOIN_BLOOM_FILTER_ENABLED =
+    buildConf("spark.gluten.sql.columnar.backend.velox.propagateJoinBloomFilter.enabled")
+      .doc("Apply an existing Bloom filter before an earlier inner join on an equivalent key.")
+      .booleanConf
+      .createWithDefault(true)
 
   val REUSE_FILTERED_FINAL_AGGREGATE_ENABLED =
     buildConf("spark.gluten.sql.columnar.backend.velox.reuseFilteredFinalAggregate.enabled")
