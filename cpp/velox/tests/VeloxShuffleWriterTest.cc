@@ -1013,6 +1013,32 @@ TEST_P(RoundRobinPartitioningShuffleWriterTest, spillVerifyResult) {
   shuffleWriteReadMultiBlocks(*shuffleWriter, 2, {blockPid1, blockPid2});
 }
 
+TEST_P(RoundRobinPartitioningShuffleWriterTest, binaryValuesInFullBatch) {
+  if (GetParam().shuffleWriterType != ShuffleWriterType::kHashShuffle) {
+    GTEST_SKIP() << "Exercises the hash writer";
+  }
+  auto writer = createShuffleWriter(2);
+  constexpr int32_t kRows = 8192;
+  const std::array<int32_t, 12> lengths = {0, 1, 7, 12, 13, 15, 16, 17, 31, 32, 33, 257};
+  std::vector<std::string> backing(kRows);
+  std::vector<std::optional<StringView>> input;
+  std::vector<std::optional<StringView>> expected[2];
+  for (int32_t i = 0; i < kRows; ++i) {
+    std::optional<StringView> value;
+    if (i % 19 != 0) {
+      backing[i].assign(lengths[i % lengths.size()], static_cast<char>(i % 251));
+      value.emplace(backing[i]);
+    }
+    input.push_back(value);
+    expected[i % 2].push_back(value);
+  }
+  auto rows = makeRowVector({makeNullableFlatVector<facebook::velox::StringView>(input)});
+  ASSERT_NOT_OK(splitRowVector(*writer, rows));
+  auto even = makeRowVector({makeNullableFlatVector<facebook::velox::StringView>(expected[0])});
+  auto odd = makeRowVector({makeNullableFlatVector<facebook::velox::StringView>(expected[1])});
+  shuffleWriteReadMultiBlocks(*writer, 2, {{even}, {odd}});
+}
+
 TEST_P(RoundRobinPartitioningShuffleWriterTest, sortMaxRows) {
   if (GetParam().shuffleWriterType != ShuffleWriterType::kSortShuffle) {
     return;
