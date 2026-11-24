@@ -16,11 +16,30 @@
  */
 package org.apache.spark.sql.internal
 
+import org.apache.gluten.config.GlutenCoreConfig
+
 import org.apache.spark.network.util.ByteUnit
 
 import org.scalatest.funsuite.AnyFunSuite
 
 class GlutenConfigUtilSuite extends AnyFunSuite {
+
+  test("parseConfig normalizes registered Gluten values and preserves other entries") {
+    val bytes = GlutenCoreConfig.COLUMNAR_MEMORY_RESERVATION_BLOCK_SIZE.key
+    val flag = GlutenCoreConfig.DYNAMIC_OFFHEAP_SIZING_ENABLED.key
+    val original = Map(
+      bytes -> "2m",
+      flag -> "TRUE",
+      "spark.gluten.unregistered" -> " 2m ",
+      "spark.other.setting" -> "TRUE")
+    val expected = original.updated(bytes, "2097152").updated(flag, "true")
+    assert(GlutenConfigUtil.parseConfig(original) == expected)
+    assert(GlutenConfigUtil.parseConfig(expected) == expected)
+    assert(GlutenConfigUtil.parseConfig(Map.empty).isEmpty)
+    intercept[IllegalArgumentException] {
+      GlutenConfigUtil.parseConfig(original.updated(flag, "invalid"))
+    }
+  }
 
   test("mapByteConfValue should return correct value") {
     val conf = Map(
