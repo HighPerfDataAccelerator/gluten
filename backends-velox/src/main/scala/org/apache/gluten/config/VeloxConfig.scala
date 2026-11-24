@@ -209,7 +209,8 @@ object VeloxConfig extends ConfigRegistry {
 
   val AGGREGATE_INTERSECT_KEYS_ENABLED =
     buildConf("spark.gluten.sql.columnar.backend.velox.aggregateIntersectKeys.enabled")
-      .doc("Use a grouped source mask for chained INTERSECT DISTINCT operations on integral keys from a common joined relation.")
+      .doc("Use a grouped source mask for chained INTERSECT DISTINCT operations " +
+        "on integral keys from a common joined relation.")
       .booleanConf
       .createWithDefault(true)
 
