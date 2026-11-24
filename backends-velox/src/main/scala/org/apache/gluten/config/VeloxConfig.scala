@@ -31,6 +31,8 @@ import java.util.concurrent.TimeUnit
 class VeloxConfig(conf: SQLConf) extends GlutenConfig(conf) {
   import VeloxConfig._
 
+  def aggregateIntersectKeysEnabled: Boolean = getConf(AGGREGATE_INTERSECT_KEYS_ENABLED)
+
   def reuseFilteredFinalAggregateEnabled: Boolean = getConf(REUSE_FILTERED_FINAL_AGGREGATE_ENABLED)
 
   def runtimeBloomCascadeEnabled: Boolean = getConf(RUNTIME_BLOOM_CASCADE_ENABLED)
@@ -204,6 +206,12 @@ object VeloxConfig extends ConfigRegistry {
       .intConf
       .checkValue(v => v >= 0 && v <= 32, "Must be between0and32")
       .createWithDefault(0)
+
+  val AGGREGATE_INTERSECT_KEYS_ENABLED =
+    buildConf("spark.gluten.sql.columnar.backend.velox.aggregateIntersectKeys.enabled")
+      .doc("Use a grouped source mask for chained INTERSECT DISTINCT operations on integral keys from a common joined relation.")
+      .booleanConf
+      .createWithDefault(true)
 
   val REUSE_FILTERED_FINAL_AGGREGATE_ENABLED =
     buildConf("spark.gluten.sql.columnar.backend.velox.reuseFilteredFinalAggregate.enabled")
