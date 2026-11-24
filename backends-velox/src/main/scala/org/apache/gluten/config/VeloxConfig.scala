@@ -1125,6 +1125,25 @@ object VeloxConfig extends ConfigRegistry {
       .booleanConf
       .createWithDefault(false)
 
+  val SHARED_PLAN_PAYLOAD_ENABLED =
+    buildConf("spark.gluten.experimental.sharedPlanPayload.enabled")
+      .experimental()
+      .doc(
+        "Share large native scan plans through a Spark broadcast instead of embedding " +
+          "the same bytes in every task partition. Split metadata remains per partition. " +
+          "This changes JVM transport only; native plan parsing remains per task.")
+      .booleanConf
+      .createWithDefault(false)
+
+  val SHARED_PLAN_PAYLOAD_MIN_BYTES =
+    buildConf("spark.gluten.experimental.sharedPlanPayload.minBytes")
+      .experimental()
+      .doc(
+        "Minimum serialized native scan plan size, in bytes, for shared plan transport. " +
+          "The scan partition producer requires a value between 262144 and 2147483647.")
+      .longConf
+      .createWithDefault(262144L)
+
   val VELOX_BROADCAST_BUILD_RELATION_USE_OFFHEAP =
     buildConf("spark.gluten.velox.offHeapBroadcastBuildRelation.enabled")
       .experimental()
