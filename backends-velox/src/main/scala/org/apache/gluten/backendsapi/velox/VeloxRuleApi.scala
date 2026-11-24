@@ -58,6 +58,8 @@ object VeloxRuleApi {
     injector.injectOptimizerRule(DimensionBridgeJoinReorder.install)
     injector.injectOptimizerRule(DimensionStringGroupingIds.install)
     injector.injectOptimizerRule(SelectiveKeyRuntimeBloomFilter.install)
+    injector.injectPostHocResolutionRule(_ => ShareGroupedMembershipKeys)
+    injector.injectPlannerStrategy(PlanMembershipKeys.apply)
     injector.injectQueryStagePrepRule(ReuseFilteredFinalAggregate.apply)
     injector.injectOptimizerRule(CollectRewriteRule.apply)
     injector.injectOptimizerRule(HLLRewriteRule.apply)
