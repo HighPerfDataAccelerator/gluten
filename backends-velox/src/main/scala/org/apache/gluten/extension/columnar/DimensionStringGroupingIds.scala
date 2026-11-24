@@ -346,9 +346,9 @@ case class DimensionStringGroupingIds(session: SparkSession)
       case ((plan, m), (orig, id, c)) =>
         mapping(c.dimension, c.key) match {
           case Some((table, mid, mkey)) =>
-            (
-              Join(plan, table, LeftOuter, Some(EqualTo(id, mid)), JoinHint.NONE),
-              m + (orig.exprId -> mkey))
+            val lookup = Join(plan, table, LeftOuter, Some(EqualTo(id, mid)), JoinHint.NONE)
+            lookup.setTagValue(RankBeforeLookup.lookupKey, mid.exprId)
+            (lookup, m + (orig.exprId -> mkey))
           case None => return newAgg
         }
     }
@@ -376,6 +376,9 @@ case class DimensionStringGroupingIds(session: SparkSession)
             r
         }.getOrElse(agg)
     }
-    if (changed) RemoveNoopOperators(CollapseProject(ColumnPruning(result))) else plan
+    if (changed) {
+      val cleaned = RemoveNoopOperators(CollapseProject(ColumnPruning(result)))
+      RankBeforeLookup(cleaned)
+    } else plan
   }
 }
