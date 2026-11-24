@@ -57,6 +57,7 @@ object VeloxRuleApi {
     injector.injectOptimizerRule(SemiJoinRuntimeBloomFilter.install)
     injector.injectOptimizerRule(DimensionBridgeJoinReorder.install)
     injector.injectOptimizerRule(DimensionStringGroupingIds.install)
+    injector.injectOptimizerRule(_ => ProjectExpandMeasures)
     injector.injectOptimizerRule(SelectiveKeyRuntimeBloomFilter.install)
     injector.injectQueryStagePrepRule(ReuseFilteredFinalAggregate.apply)
     injector.injectOptimizerRule(CollectRewriteRule.apply)
