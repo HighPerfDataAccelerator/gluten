@@ -64,12 +64,24 @@ class GlutenWholeStageColumnarRDD(
     wsContext: WholeStageTransformContext = null)
   extends RDD[ColumnarBatch](sc, rdds.getDependencies) {
 
+  // A backend that reads the partition plan can omit the driver transform context
+  // from the serialized scan RDD when no task needs partition-specific stats.
+  private val taskPlanContext =
+    if (
+      wsContext != null && !enableCudf && !GlutenConfig.get.enablePassStageInputStats &&
+      !BackendsApiManager.getIteratorApiInstance.requiresFirstStageTransformContext
+    ) {
+      null
+    } else {
+      wsContext
+    }
+
   override def compute(split: Partition, context: TaskContext): Iterator[ColumnarBatch] = {
     GlutenTimeMetric.millis(pipelineTime) {
       _ =>
-        if (GlutenConfig.get.enablePassStageInputStats && wsContext != null) {
+        if (GlutenConfig.get.enablePassStageInputStats && taskPlanContext != null) {
           ApplyStageInputStatsRule.setStageInputStatsToInputNode(
-            wsContext,
+            taskPlanContext,
             split.index,
             rdds.getPartitionLength)
         }
@@ -84,7 +96,7 @@ class GlutenWholeStageColumnarRDD(
           split.index,
           inputIterators,
           enableCudf,
-          wsContext
+          taskPlanContext
         )
     }
   }

@@ -39,6 +39,9 @@ trait IteratorApi {
       metadataColumnNames: Seq[String],
       properties: Map[String, String]): SplitInfo
 
+  /** Whether a first-stage iterator needs the driver transform context on the executor. */
+  def requiresFirstStageTransformContext: Boolean = true
+
   /** Generate native row partition. */
   def genPartitions(
       wsCtx: WholeStageTransformContext,

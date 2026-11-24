@@ -53,6 +53,8 @@ import scala.collection.mutable
 
 class VeloxIteratorApi extends IteratorApi with Logging {
 
+  override def requiresFirstStageTransformContext: Boolean = false
+
   private def setFileSchemaForLocalFiles(
       localFilesNode: LocalFilesNode,
       fileSchema: StructType,
