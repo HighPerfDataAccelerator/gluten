@@ -33,6 +33,8 @@ class VeloxConfig(conf: SQLConf) extends GlutenConfig(conf) {
 
   def reuseFilteredFinalAggregateEnabled: Boolean = getConf(REUSE_FILTERED_FINAL_AGGREGATE_ENABLED)
 
+  def shareGroupedThresholdEnabled: Boolean = getConf(SHARE_GROUPED_THRESHOLD_ENABLED)
+
   def runtimeBloomCascadeEnabled: Boolean = getConf(RUNTIME_BLOOM_CASCADE_ENABLED)
   def runtimeBloomCascadeMaxCreationKeyBytes: Long =
     getConf(RUNTIME_BLOOM_CASCADE_MAX_CREATION_KEY_BYTES)
@@ -215,6 +217,12 @@ object VeloxConfig extends ConfigRegistry {
     buildConf("spark.gluten.sql.columnar.backend.velox.runtimeBloom.cascade.enabled")
       .doc("Build bounded extra runtime Bloom filters from dimensions already selected by stock runtime filters. Int/long inner join keys only; disabled by default.")
       .booleanConf.createWithDefault(false)
+  val SHARE_GROUPED_THRESHOLD_ENABLED =
+    buildConf("spark.gluten.sql.columnar.backend.velox.shareGroupedThreshold.enabled")
+      .doc("Share a grouped inner join between a filtered rollup and its scalar average threshold.")
+      .booleanConf
+      .createWithDefault(true)
+
   val RUNTIME_BLOOM_CASCADE_MAX_CREATION_KEY_BYTES =
     buildConf("spark.gluten.sql.columnar.backend.velox.runtimeBloom.cascade.maxCreationKeyBytes")
       .doc("Maximum estimated projected-key bytes for a cascading filter creation scan. Existing Spark Bloom state memory limits remain in force.")
