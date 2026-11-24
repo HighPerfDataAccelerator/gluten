@@ -55,6 +55,8 @@ object VeloxRuleApi {
     // Inject the regular Spark rules directly.
     injector.injectOptimizerRule(CascadingRuntimeBloomFilter.install)
     injector.injectOptimizerRule(SemiJoinRuntimeBloomFilter.install)
+    injector.injectOptimizerRule(_ => ReduceExistenceJoins)
+    injector.injectPlannerStrategy(_ => ReduceExistenceJoins.FoldExistenceCounts)
     injector.injectOptimizerRule(DimensionBridgeJoinReorder.install)
     injector.injectOptimizerRule(DimensionStringGroupingIds.install)
     injector.injectOptimizerRule(SelectiveKeyRuntimeBloomFilter.install)
