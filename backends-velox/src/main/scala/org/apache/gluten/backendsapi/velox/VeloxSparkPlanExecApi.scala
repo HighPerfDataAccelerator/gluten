@@ -30,7 +30,7 @@ import org.apache.gluten.substrait.SubstraitContext
 import org.apache.gluten.substrait.expression.{ExpressionBuilder, ExpressionNode, WindowFunctionNode}
 import org.apache.gluten.vectorized.{ColumnarBatchSerializer, ColumnarBatchSerializeResult}
 
-import org.apache.spark.{ShuffleDependency, SparkEnv}
+import org.apache.spark.{ShuffleDependency, SparkEnv, TaskContext}
 import org.apache.spark.api.python.{ColumnarArrowEvalPythonExec, PullOutArrowEvalPythonPreProjectHelper}
 import org.apache.spark.internal.Logging
 import org.apache.spark.rdd.RDD
@@ -896,11 +896,9 @@ class VeloxSparkPlanExecApi extends SparkPlanExecApi with Logging {
     val useOffheapBroadcastBuildRelation =
       VeloxConfig.get.enableBroadcastBuildRelationInOffheap
 
-    val serialized: Seq[ColumnarBatchSerializeResult] = newChild
-      .executeColumnar()
-      .mapPartitions(itr => Iterator(BroadcastUtils.serializeStream(itr)))
-      .filter(_.numRows != 0)
-      .collect
+    val batches = newChild.executeColumnar()
+    val serialized = batches.context.runJob(batches, SerializeBroadcastPartition)
+      .iterator.filter(_.numRows != 0).toVector
     val buildSideRowCount = serialized.map(_.numRows).sum
     val rawSize = serialized.map(_.sizeInBytes()).sum
     if (rawSize >= GlutenConfig.get.maxBroadcastTableSize) {
@@ -1770,4 +1768,11 @@ class VeloxSparkPlanExecApi extends SparkPlanExecApi with Logging {
         }
     }
   }
+}
+
+private object SerializeBroadcastPartition
+  extends ((TaskContext, Iterator[ColumnarBatch]) => ColumnarBatchSerializeResult)
+  with Serializable {
+  override def apply(context: TaskContext, batches: Iterator[ColumnarBatch]): ColumnarBatchSerializeResult =
+    BroadcastUtils.serializeStream(batches)
 }
