@@ -20,10 +20,11 @@ import org.apache.spark.sql.catalyst.expressions._
 import org.apache.spark.sql.catalyst.expressions.aggregate.{AggregateExpression, Sum}
 import org.apache.spark.sql.catalyst.plans.Inner
 import org.apache.spark.sql.catalyst.plans.logical._
+import org.apache.spark.sql.internal.SQLConf
 import org.apache.spark.sql.types.DecimalType
 
 /** Share the rows of a join used by a grouped SUM and by its scalar SUM threshold. */
-private[columnar] object ShareScalarSumInput {
+private[columnar] object ShareScalarSumInput extends PredicateHelper {
   private def sumOf(aggregate: Aggregate): Option[Sum] =
     aggregate.aggregateExpressions.flatMap(_.collect { case e: AggregateExpression => e }) match {
       case Seq(e) if !e.isDistinct && e.filter.isEmpty =>
@@ -64,9 +65,28 @@ private[columnar] object ShareScalarSumInput {
           .references.subsetOf(AttributeSet(keys))
     }
 
-  private def shared(aggregate: Aggregate, key: Attribute, sum: Sum): Aggregate = {
+  private def shared(aggregate: Aggregate, key: Attribute, sum: Sum, threshold: Long): Aggregate = {
+    val equalities = aggregate.child.collect {
+      case f: Filter => splitConjunctivePredicates(f.condition)
+      case j: Join => j.condition.toSeq.flatMap(splitConjunctivePredicates)
+    }.flatten.collect { case EqualTo(a: Attribute, b: Attribute) => a -> b }
+    def equijoin(left: LogicalPlan, right: LogicalPlan): Boolean = equalities.exists {
+      case (a, b) => (left.outputSet.contains(a) && right.outputSet.contains(b)) ||
+        (right.outputSet.contains(a) && left.outputSet.contains(b))
+    }
+    val conf = SQLConf.get
+    val buildBudget = BigInt(threshold) * conf.numShufflePartitions
+    val input = aggregate.child.transformUp {
+      case j @ Join(left, right, Inner, _, JoinHint.NONE)
+          if threshold > 0 && equijoin(left, right) &&
+            left.stats.sizeInBytes != conf.defaultSizeInBytes &&
+            right.stats.sizeInBytes != conf.defaultSizeInBytes &&
+            right.stats.sizeInBytes > threshold && right.stats.sizeInBytes <= buildBudget &&
+            left.stats.sizeInBytes >= right.stats.sizeInBytes * 4 =>
+        j.copy(hint = JoinHint(None, Some(HintInfo(strategy = Some(SHUFFLE_HASH)))))
+    }
     val value = Alias(sum.child, "_shared_sum_input")()
-    val columns = Project(Seq(key, value), aggregate.child)
+    val columns = Project(Seq(key, value), input)
     val exchange = SharedGroupingInput(columns, Seq(key), columns.output)
     aggregate.copy(
       aggregateExpressions = aggregate.aggregateExpressions.map {
@@ -106,12 +126,13 @@ private[columnar] object ShareScalarSumInput {
     if BindReferences.bindReference(outer.child, aggregate.child.output).semanticEquals(
       BindReferences.bindReference(inner.child, scalar.child.output))
   } yield {
-    val replacement = query.withNewPlan(shared(scalar, scalar.child.output(index), inner))
+    val replacement =
+      query.withNewPlan(shared(scalar, scalar.child.output(index), inner, broadcastThreshold))
     Filter(
       filter.condition.transformUp {
         case q: ScalarSubquery if q.exprId == query.exprId => replacement
       },
-      shared(aggregate, key, outer))
+      shared(aggregate, key, outer, broadcastThreshold))
   }
 
   def apply(plan: LogicalPlan, broadcastThreshold: Long): LogicalPlan = plan.transformUp {

@@ -144,6 +144,24 @@ class GlutenShareGroupedThresholdSuite extends QueryTest with SharedSparkSession
         Seq(config, "spark.sql.adaptive.enabled", "spark.sql.exchange.reuse").foreach {
           key => withSQLConf(key -> "false")(assert(markers(rule(analyzed(query()))) == 0))
         }
+        val facts = (0 until 200).map(i => s"(${i % 4}, 1.50, 2)").mkString(",")
+        val from = s"""FROM VALUES $facts AS f(k,cost,qty),
+          VALUES (1,1),(1,1),(2,2),(3,1),(4,1) AS d(k,area),
+          VALUES (1),(2) AS n(area) WHERE f.k=d.k AND d.area=n.area"""
+        val original = analyzed(query().replace(joined, from))
+        def hashHints(p: LogicalPlan): Int = p.collectWithSubqueries {
+          case j: org.apache.spark.sql.catalyst.plans.logical.Join
+              if j.hint.rightHint.flatMap(_.strategy).contains(
+                org.apache.spark.sql.catalyst.plans.logical.SHUFFLE_HASH) => j
+        }.size
+        assert(hashHints(rule(original)) == 0)
+        withSQLConf(
+          "spark.sql.autoBroadcastJoinThreshold" -> "16",
+          "spark.sql.shuffle.partitions" -> "64") {
+          val shared = rule(original)
+          assert(markers(shared) == 2 && hashHints(shared) >= 2)
+          assert(rows(original) == rows(shared))
+        }
         withSQLConf("spark.sql.autoBroadcastJoinThreshold" -> "1g") {
           assert(markers(rule(analyzed(query()))) == 0)
         }
