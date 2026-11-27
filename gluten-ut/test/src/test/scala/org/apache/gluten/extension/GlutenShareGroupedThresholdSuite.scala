@@ -87,4 +87,87 @@ class GlutenShareGroupedThresholdSuite extends QueryTest with SharedSparkSession
       spark.experimental.extraStrategies = previous
     }
   }
+
+  test("share joined input of a grouped decimal sum and its scalar threshold") {
+    val prefix = "org.apache.gluten.extension.columnar."
+    val module = scala.util.Try(Class.forName(prefix + "ShareGroupedThreshold$"))
+    assume(module.isSuccess, "requires Velox")
+    val rule = module.get.getField("MODULE$").get(null).asInstanceOf[Rule[LogicalPlan]]
+    val strategy = Class.forName(prefix + "PlanSharedGroupingInput")
+      .getConstructor(classOf[SparkSession]).newInstance(spark).asInstanceOf[SparkStrategy]
+    val config = "spark.gluten.sql.columnar.backend.velox.shareGroupedThreshold.enabled"
+    val joined = """FROM VALUES (1, 3.00, 2), (1, NULL, 2), (2, -1.50, 3),
+      (3, 0.00, 1), (3, 4.50, 1), (4, NULL, 2) AS f(k, cost, qty)
+      JOIN VALUES (1, 1), (1, 1), (2, 2), (3, 1), (4, 1) AS d(k, area) ON f.k = d.k
+      JOIN VALUES (1), (2) AS n(area) ON d.area = n.area"""
+    def query(inner: String = joined, amount: String = "cost * qty"): String =
+      s"""SELECT f.k, SUM(cost * qty) AS total $joined GROUP BY f.k
+         HAVING SUM(cost * qty) > (SELECT SUM($amount) * 0.1 $inner) ORDER BY f.k"""
+    def analyzed(q: String): LogicalPlan = spark.sql(q).queryExecution.analyzed
+    def markers(p: LogicalPlan): Int = p.collectWithSubqueries {
+      case n if n.nodeName == "SharedGroupingInput" => n
+    }.size
+    def rows(p: LogicalPlan): Seq[String] =
+      spark.sessionState.executePlan(p).executedPlan.executeCollect().toSeq.map(_.toString)
+    val saved = spark.experimental.extraStrategies
+    spark.experimental.extraStrategies = strategy +: saved
+    try {
+      withSQLConf(
+        config -> "true",
+        "spark.sql.shuffle.partitions" -> "2",
+        "spark.sql.adaptive.enabled" -> "true",
+        "spark.sql.exchange.reuse" -> "true",
+        "spark.sql.autoBroadcastJoinThreshold" -> "-1"
+      ) {
+        Seq(
+          query(),
+          query().replace(joined, joined + " WHERE d.area < 0"),
+          query().replace(joined, joined + " WHERE f.cost IS NULL")).foreach {
+          sql =>
+            val original = analyzed(sql)
+            val changed = rule(original)
+            assert(markers(changed) == 2)
+            assert(rule(changed).fastEquals(changed))
+            assert(original.schema == changed.schema)
+            assert(rows(original) == rows(changed))
+        }
+        Seq(
+          query(joined + " WHERE f.k > 1"),
+          query(joined, "cost * (qty + 1)"),
+          query().replace("SUM(cost", "SUM(DISTINCT cost"),
+          query().replace("cost * qty", "CAST(cost AS DOUBLE) * qty"),
+          query().replace("JOIN VALUES (1),", "LEFT JOIN VALUES (1),"),
+          query(joined.replace(
+            "AS f(",
+            "AS fact(").replace("f.k =", "fact.k =") + " WHERE fact.k = f.k")
+        ).foreach(q => assert(markers(rule(analyzed(q))) == 0))
+        Seq(config, "spark.sql.adaptive.enabled", "spark.sql.exchange.reuse").foreach {
+          key => withSQLConf(key -> "false")(assert(markers(rule(analyzed(query()))) == 0))
+        }
+        val facts = (0 until 200).map(i => s"(${i % 4}, 1.50, 2)").mkString(",")
+        val from = s"""FROM VALUES $facts AS f(k,cost,qty),
+          VALUES (1,1),(1,1),(2,2),(3,1),(4,1) AS d(k,area),
+          VALUES (1),(2) AS n(area) WHERE f.k=d.k AND d.area=n.area"""
+        val original = analyzed(query().replace(joined, from))
+        def hashHints(p: LogicalPlan): Int = p.collectWithSubqueries {
+          case j: org.apache.spark.sql.catalyst.plans.logical.Join
+              if j.hint.rightHint.flatMap(_.strategy).contains(
+                org.apache.spark.sql.catalyst.plans.logical.SHUFFLE_HASH) => j
+        }.size
+        assert(hashHints(rule(original)) == 0)
+        withSQLConf(
+          "spark.sql.autoBroadcastJoinThreshold" -> "16",
+          "spark.sql.shuffle.partitions" -> "64") {
+          val shared = rule(original)
+          assert(markers(shared) == 2 && hashHints(shared) >= 2)
+          assert(rows(original) == rows(shared))
+        }
+        withSQLConf("spark.sql.autoBroadcastJoinThreshold" -> "1g") {
+          assert(markers(rule(analyzed(query()))) == 0)
+        }
+      }
+    } finally {
+      spark.experimental.extraStrategies = saved
+    }
+  }
 }
