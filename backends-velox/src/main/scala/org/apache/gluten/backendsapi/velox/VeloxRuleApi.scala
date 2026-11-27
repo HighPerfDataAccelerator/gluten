@@ -57,6 +57,7 @@ object VeloxRuleApi {
     injector.injectPlannerStrategy(PlanSharedGroupingInput.apply)
     injector.injectOptimizerRule(CascadingRuntimeBloomFilter.install)
     injector.injectOptimizerRule(SemiJoinRuntimeBloomFilter.install)
+    injector.injectPlannerStrategy(FactorGroupedJoinCounts.apply)
     injector.injectOptimizerRule(DimensionBridgeJoinReorder.install)
     injector.injectOptimizerRule(DimensionStringGroupingIds.install)
     injector.injectOptimizerRule(SelectiveKeyRuntimeBloomFilter.install)
