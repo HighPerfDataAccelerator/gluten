@@ -65,6 +65,7 @@ object VeloxRuleApi {
     injector.injectOptimizerRule(RewriteCastFromArray.apply)
     injector.injectOptimizerRule(RewriteUnboundedWindow.apply)
     injector.injectOptimizerRule(PushAggregateThroughJoinBatch.apply)
+    injector.injectPlannerStrategy(ReuseSemiJoinInput.apply)
     injector.injectPlannerStrategy(ImplementJoinAggregate.apply)
 
     if (!BackendsApiManager.getSettings.enableJoinKeysRewrite()) {
