@@ -53,6 +53,8 @@ object VeloxRuleApi {
    */
   private def injectSpark(injector: SparkInjector): Unit = {
     // Inject the regular Spark rules directly.
+    injector.injectPostHocResolutionRule(_ => ShareGroupedThreshold)
+    injector.injectPlannerStrategy(PlanSharedGroupingInput.apply)
     injector.injectOptimizerRule(CascadingRuntimeBloomFilter.install)
     injector.injectOptimizerRule(SemiJoinRuntimeBloomFilter.install)
     injector.injectOptimizerRule(DimensionBridgeJoinReorder.install)
