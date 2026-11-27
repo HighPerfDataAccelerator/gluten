@@ -57,9 +57,12 @@ object VeloxRuleApi {
     injector.injectPlannerStrategy(PlanSharedGroupingInput.apply)
     injector.injectOptimizerRule(CascadingRuntimeBloomFilter.install)
     injector.injectOptimizerRule(SemiJoinRuntimeBloomFilter.install)
+    injector.injectPlannerStrategy(FactorGroupedJoinCounts.apply)
     injector.injectOptimizerRule(DimensionBridgeJoinReorder.install)
     injector.injectOptimizerRule(DimensionStringGroupingIds.install)
     injector.injectOptimizerRule(SelectiveKeyRuntimeBloomFilter.install)
+    injector.injectPostHocResolutionRule(_ => ShareGroupedMembershipKeys)
+    injector.injectPlannerStrategy(PlanMembershipKeys.apply)
     injector.injectQueryStagePrepRule(ReuseFilteredFinalAggregate.apply)
     injector.injectOptimizerRule(CollectRewriteRule.apply)
     injector.injectOptimizerRule(HLLRewriteRule.apply)
@@ -67,6 +70,7 @@ object VeloxRuleApi {
     injector.injectOptimizerRule(RewriteCastFromArray.apply)
     injector.injectOptimizerRule(RewriteUnboundedWindow.apply)
     injector.injectOptimizerRule(PushAggregateThroughJoinBatch.apply)
+    injector.injectPlannerStrategy(ReuseSemiJoinInput.apply)
     injector.injectPlannerStrategy(ImplementJoinAggregate.apply)
 
     if (!BackendsApiManager.getSettings.enableJoinKeysRewrite()) {

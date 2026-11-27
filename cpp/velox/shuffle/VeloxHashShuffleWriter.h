@@ -356,6 +356,10 @@ class VeloxHashShuffleWriter : public VeloxShuffleWriter {
     // for write the next lines of a partition a few positions ahead to overlap those misses.
     constexpr size_t kPrefetchDistance = 8;
     const auto numUsed = partitionUsed_.size();
+    // Packing eight indices pays off on flat batches with sufficiently long partition runs.
+    constexpr bool kIs64BitInteger = std::is_same_v<T, uint64_t> || std::is_same_v<T, int64_t>;
+    const bool packIndices = kIs64BitInteger && enableSveGather_ && splitRowIds_ == rowOffset2RowId_.data() &&
+        numUsed != 0 && rowOffset2RowId_.size() / numUsed >= 24 && detail::supportsPackedGather();
     for (size_t i = 0; i < numUsed; ++i) {
       if (i + kPrefetchDistance < numUsed) {
         const auto next = partitionUsed_[i + kPrefetchDistance];
@@ -369,7 +373,12 @@ class VeloxHashShuffleWriter : public VeloxShuffleWriter {
       auto pos = partition2RowOffsetBase_[pid];
       auto end = partition2RowOffsetBase_[pid + 1];
       detail::gatherFixedWidth(
-          reinterpret_cast<const T*>(srcAddr), splitRowIds_ + pos, end - pos, dstPidBase, enableSveGather_);
+          reinterpret_cast<const T*>(srcAddr),
+          splitRowIds_ + pos,
+          end - pos,
+          dstPidBase,
+          enableSveGather_,
+          packIndices);
     }
     return arrow::Status::OK();
   }
