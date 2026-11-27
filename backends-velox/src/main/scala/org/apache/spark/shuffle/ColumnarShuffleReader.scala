@@ -24,6 +24,7 @@ import org.apache.spark._
 import org.apache.spark.internal.{config, Logging}
 import org.apache.spark.io.CompressionCodec
 import org.apache.spark.serializer.SerializerManager
+import org.apache.spark.shuffle.sort.ColumnarShuffleManager
 import org.apache.spark.storage.{BlockId, BlockManager, BlockManagerId, ShuffleBlockFetcherIterator, ShuffleBlockFetcherIteratorParams}
 import org.apache.spark.util.CompletionIterator
 
@@ -82,11 +83,15 @@ class ColumnarShuffleReader[K, C](
     val recordIter = dep.serializer.newInstance() match {
       // Gluten's own columnar serializer deserializes all streams in one batch.
       case columnarSerializer: ColumnarBatchSerializerInstance =>
+        val client = SparkEnv.get.shuffleManager match {
+          case manager: ColumnarShuffleManager => manager.columnarBlockStoreClient(blockManager)
+          case _ => blockManager.blockStoreClient
+        }
         val shuffleBlockFetcherIterator =
           SparkShimLoader.getSparkShims.getShuffleBlockFetcherIterator(
             ShuffleBlockFetcherIteratorParams(
               context,
-              blockManager.blockStoreClient,
+              client,
               blockManager,
               mapOutputTracker,
               blocksByAddress,

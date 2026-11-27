@@ -643,3 +643,52 @@ This feature has been tested through a series of tests, and we are collecting mo
 # Accelerators
 
 Please refer [QAT](VeloxQAT.md) for details
+
+
+## Experimental RDMA shuffle on Linux
+
+The Velox columnar shuffle can carry remote executor block fetches over IPv4 RDMA-CM
+streams. Map tasks write the usual indexed shuffle files. Spark's block server still
+performs authentication, network encryption, retries, and streaming of large fetches to
+disk. The client connects over loopback to a local relay, which connects by RDMA to
+the producer's relay and forwards to its Spark block server. This design copies bytes
+through host memory on both ends. Each executor starts one ingress process and reuses
+one egress process per remote block manager address. Same-host fetches and row shuffles
+use the usual Spark paths.
+
+Build the optional executable with rdma-core development headers and librdmacm installed.
+The relay can be built independently of Velox.
+
+```sh
+cmake -S cpp/rdma -B build-rdma -DCMAKE_BUILD_TYPE=Release
+cmake --build build-rdma
+```
+
+Deploy the rebuilt Velox bundle on the driver and all executors. Install the relay,
+librdmacm and the provider for the RDMA NIC on each executor.
+Expose the NIC and an IPv4 address reachable by RDMA-CM across executors, and allow
+the relay to pin host memory. The ingress relay binds that address at the executor's
+block manager port in the RDMA port space.
+Executors sharing a rail address must have distinct block manager ports.
+
+```properties
+spark.shuffle.manager=org.apache.spark.shuffle.sort.ColumnarShuffleManager
+spark.gluten.shuffle.rdma.enabled=true
+spark.gluten.shuffle.rdma.executable=/opt/gluten/bin/gluten-rdma-relay
+spark.authenticate=true
+spark.network.crypto.enabled=true
+```
+
+Supply the Spark authentication secret through the deployment's usual secret mechanism.
+The transport uses the advertised block manager host as its rail address by default.
+When those addresses differ, set `spark.gluten.shuffle.rdma.address.<advertised-host>`
+to the corresponding rail IPv4 address for each host. The executable defaults to
+`gluten-rdma-relay` on the executor's PATH.
+
+This mode targets executor-served columnar map outputs on Spark 4.2.1 with network
+crypto. Enabling it with RPC TLS, the external shuffle service, push-based shuffle or
+shuffle block migration during decommissioning raises a configuration error. Failure to start the relay or
+connect a remote peer is surfaced to Spark. Set `spark.gluten.shuffle.rdma.enabled=false`
+(the default) to run the standard transport. Executor logs show the RDMA ingress
+and egress endpoints. Compare remote bytes and fetch wait from the Spark event log
+with NIC counters and total CPU across both the JVM and relay processes.

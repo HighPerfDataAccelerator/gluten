@@ -21,10 +21,11 @@ import org.apache.gluten.shuffle.SupportsColumnarShuffle
 
 import org.apache.spark.{ShuffleDependency, SparkConf, SparkEnv, TaskContext}
 import org.apache.spark.internal.Logging
+import org.apache.spark.network.shuffle.BlockStoreClient
 import org.apache.spark.serializer.SerializerManager
 import org.apache.spark.shuffle._
 import org.apache.spark.shuffle.api.ShuffleExecutorComponents
-import org.apache.spark.storage.{BlockId, GlutenShuffleIndexCache}
+import org.apache.spark.storage.{BlockId, BlockManager, GlutenShuffleIndexCache}
 import org.apache.spark.util.collection.OpenHashSet
 
 import java.io.InputStream
@@ -77,6 +78,24 @@ class ColumnarShuffleManager(conf: SparkConf)
   // is signature-sensitive -- re-verify it when adding a new Spark version.
   override val shuffleBlockResolver =
     new IndexShuffleBlockResolver(conf, null, taskIdMapsForShuffle)
+
+  private val rdmaEnabled = conf.getBoolean(RdmaShuffleTransport.Prefix + "enabled", false)
+  private var rdma: Option[RdmaShuffleTransport] = None
+  private var stopped = false
+
+  private[spark] def columnarBlockStoreClient(bm: BlockManager): BlockStoreClient = {
+    if (!rdmaEnabled) return bm.blockStoreClient
+    synchronized {
+      require(!stopped, "Columnar shuffle manager has stopped")
+      val client = rdma.getOrElse {
+        val transport = new RdmaShuffleTransport(conf, bm.blockManagerId, bm.blockStoreClient)
+        rdma = Some(transport)
+        transport
+      }
+      client.ensureListening()
+      client
+    }
+  }
 
   /** Obtains a [[ShuffleHandle]] to pass to tasks. */
   override def registerShuffle[K, V, C](
@@ -215,6 +234,11 @@ class ColumnarShuffleManager(conf: SparkConf)
 
   /** Shut down this ShuffleManager. */
   override def stop(): Unit = {
+    synchronized {
+      stopped = true
+      rdma.foreach(_.close())
+      rdma = None
+    }
     // SortShuffleManager.stop() stops shuffleBlockResolver.
     super.stop()
   }

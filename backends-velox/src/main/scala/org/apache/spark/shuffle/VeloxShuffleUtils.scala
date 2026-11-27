@@ -16,12 +16,18 @@
  */
 package org.apache.spark.shuffle
 
+import org.apache.spark.SparkEnv
 import org.apache.spark.shuffle.sort.{ColumnarShuffleHandle, ColumnarShuffleManager}
 
 object VeloxShuffleUtils {
 
   def genColumnarShuffleWriter[K, V](
       parameters: GenShuffleWriterParameters[K, V]): GlutenShuffleWriterWrapper[K, V] = {
+    val env = SparkEnv.get
+    env.shuffleManager match {
+      case manager: ColumnarShuffleManager => manager.columnarBlockStoreClient(env.blockManager)
+      case _ =>
+    }
     GlutenShuffleWriterWrapper(
       new ColumnarShuffleWriter[K, V](
         parameters.shuffleBlockResolver,
