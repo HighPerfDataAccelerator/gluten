@@ -20,14 +20,17 @@ import org.apache.gluten.config.VeloxConfig
 
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.SparkSession
-import org.apache.spark.sql.catalyst.expressions.{Alias, Attribute, AttributeSet}
-import org.apache.spark.sql.catalyst.expressions.aggregate.{Count, Final, Sum}
+import org.apache.spark.sql.catalyst.expressions.{Alias, Attribute, AttributeSet, ScalarSubquery, SubqueryExpression, UserDefinedExpression}
+import org.apache.spark.sql.catalyst.expressions.aggregate.{AggregateExpression, Count, Final, Max, Min, Sum}
+import org.apache.spark.sql.catalyst.plans.logical.{Aggregate, Filter, Join, LeafNode, LogicalPlan, Project}
 import org.apache.spark.sql.catalyst.plans.physical.HashPartitioning
 import org.apache.spark.sql.catalyst.rules.Rule
 import org.apache.spark.sql.execution.{ExecSubqueryExpression, FilterExec, ProjectExec, SparkPlan}
+import org.apache.spark.sql.execution.adaptive.LogicalQueryStage
 import org.apache.spark.sql.execution.aggregate.HashAggregateExec
-import org.apache.spark.sql.execution.exchange.{ENSURE_REQUIREMENTS, ShuffleExchangeExec, ShuffleExchangeLike}
-import org.apache.spark.sql.types.DecimalType
+import org.apache.spark.sql.execution.exchange.{ENSURE_REQUIREMENTS, Exchange, ShuffleExchangeExec}
+import org.apache.spark.sql.execution.joins.{ShuffledHashJoinExec, SortMergeJoinExec}
+import org.apache.spark.sql.types.{ByteType, DecimalType, IntegerType, LongType, ShortType}
 
 import scala.collection.mutable
 
@@ -35,8 +38,9 @@ import scala.collection.mutable
  * Allow normal Spark exchange/stage reuse to cover a repeated filtered final aggregation, rather
  * than reusing only its partial-input shuffle and recomputing the final aggregation. This opt-in
  * rule materializes only grouping keys after the HAVING filter. It preserves the existing hash
- * partitioning and uses Spark's ordinary shuffle lifecycle and memory accounting. A weak filter can
- * add substantial shuffle traffic, so this is deliberately default disabled.
+ * partitioning and uses Spark's ordinary shuffle lifecycle and memory accounting. The general
+ * HAVING rewrite is opt-in. A separate setting controls scalar MIN/MAX filters on exact joined
+ * aggregates.
  */
 case class ReuseFilteredFinalAggregate(session: SparkSession) extends Rule[SparkPlan] with Logging {
   // A bare grouping key and an identity Alias of it have identical values,
@@ -64,10 +68,61 @@ case class ReuseFilteredFinalAggregate(session: SparkSession) extends Rule[Spark
     case _ => plan
   }
 
-  private def eligible(plan: SparkPlan): Option[HashPartitioning] = plan match {
-    case p @ ProjectExec(projects, FilterExec(condition, agg: HashAggregateExec))
+  // Re-evaluating the scalar or its input must produce the same threshold. In particular,
+  // unordered LIMIT and order-dependent aggregates can choose different rows on each branch.
+  private def exactInput(plan: LogicalPlan): Boolean = plan.deterministic && !plan.exists {
+    node =>
+      val supported = node match {
+        case stage: LogicalQueryStage => exactInput(stage.logicalPlan)
+        case _: Aggregate | _: Filter | _: Project | _: Join | _: LeafNode => true
+        case _ => false
+      }
+      !supported || node.expressions.exists(
+        e =>
+          e.exists {
+            case ae: AggregateExpression => ae.aggregateFunction match {
+                case _: Count => false
+                case _: Max | _: Min => ae.dataType match {
+                    case ByteType | ShortType | IntegerType | LongType |
+                        _: DecimalType => false
+                    case _ => true
+                  }
+                case sum: Sum => !sum.dataType.isInstanceOf[DecimalType]
+                case _ => true
+              }
+            case sq: SubqueryExpression => sq.isCorrelated || !exactInput(sq.plan)
+            case _: UserDefinedExpression => true
+            case _ => false
+          })
+  }
+
+  private def scalarThreshold(filter: FilterExec): Boolean = filter.logicalLink.exists {
+    case logical @ Filter(condition, agg: Aggregate) if agg.child.exists(_.isInstanceOf[Join]) =>
+      val subqueries = condition.collect { case query: SubqueryExpression => query }
+      subqueries.nonEmpty && subqueries.forall {
+        case scalar: ScalarSubquery if !scalar.isCorrelated =>
+          scalar.plan match {
+            case result: Aggregate if result.groupingExpressions.isEmpty =>
+              result.aggregateExpressions.size == 1 && result.aggregateExpressions.head.exists {
+                case ae: AggregateExpression => ae.aggregateFunction.isInstanceOf[Max] ||
+                  ae.aggregateFunction.isInstanceOf[Min]
+                case _ => false
+              }
+            case _ => false
+          }
+        case _ => false
+      } && exactInput(logical)
+    case _ => false
+  }
+
+  private def eligible(
+      plan: SparkPlan,
+      general: Boolean,
+      scalar: Boolean): Option[HashPartitioning] = plan match {
+    case p @ ProjectExec(projects, filter @ FilterExec(condition, agg: HashAggregateExec))
         if !agg.isStreaming && agg.groupingExpressions.nonEmpty &&
-          agg.aggregateExpressions.nonEmpty && p.deterministic =>
+          agg.aggregateExpressions.nonEmpty && (general || (scalar && condition.exists(
+            _.isInstanceOf[ExecSubqueryExpression]))) && p.deterministic =>
       val groupReferences = AttributeSet(agg.groupingExpressions.flatMap(_.references))
       val measures = agg.outputSet -- groupReferences
       val exactFinal = agg.aggregateExpressions.forall {
@@ -81,8 +136,17 @@ case class ReuseFilteredFinalAggregate(session: SparkSession) extends Rule[Spark
       val hasSubquery = p.find {
         node => node.expressions.exists(_.exists(_.isInstanceOf[ExecSubqueryExpression]))
       }.nonEmpty
+      val enabled =
+        if (hasSubquery) {
+          scalar && agg.child.exists {
+            case _: ShuffledHashJoinExec | _: SortMergeJoinExec => true
+            case _ => false
+          } && scalarThreshold(filter)
+        } else {
+          general
+        }
       if (
-        !exactFinal || hasSubquery || p.output.isEmpty ||
+        !enabled || !exactFinal || p.output.isEmpty ||
         !projects.forall(_.references.subsetOf(groupReferences)) ||
         (condition.references.intersect(measures)).isEmpty
       ) {
@@ -100,19 +164,21 @@ case class ReuseFilteredFinalAggregate(session: SparkSession) extends Rule[Spark
   }
 
   override def apply(plan: SparkPlan): SparkPlan = {
-    if (
-      !new VeloxConfig(session.sessionState.conf).reuseFilteredFinalAggregateEnabled ||
-      !session.sessionState.conf.exchangeReuseEnabled
-    ) {
+    val conf = session.sessionState.conf
+    val velox = new VeloxConfig(conf)
+    val general = velox.reuseFilteredFinalAggregateEnabled
+    val scalar = velox.reuseScalarHavingKeysEnabled && conf.subqueryReuseEnabled &&
+      conf.getConfString("spark.gluten.enabled", "true").toBoolean
+    if (!conf.exchangeReuseEnabled || (!general && !scalar)) {
       return plan
     }
     val counts = mutable.HashMap.empty[SparkPlan, Int]
-    def count(node: SparkPlan, parentIsShuffle: Boolean): Unit = {
-      if (!parentIsShuffle && eligible(node).nonEmpty) {
+    def count(node: SparkPlan, parentIsExchange: Boolean): Unit = {
+      if (!parentIsExchange && eligible(node, general, scalar).nonEmpty) {
         val key = materializedProject(node).canonicalized
         counts.update(key, counts.getOrElse(key, 0) + 1)
       }
-      node.children.foreach(count(_, node.isInstanceOf[ShuffleExchangeLike]))
+      node.children.foreach(count(_, node.isInstanceOf[Exchange]))
     }
     count(plan, false)
     val repeated = counts.collect { case (key, n) if n >= 2 => key }.toSet
@@ -120,12 +186,12 @@ case class ReuseFilteredFinalAggregate(session: SparkSession) extends Rule[Spark
       return plan
     }
     var inserted = 0
-    def rewrite(node: SparkPlan, parentIsShuffle: Boolean): SparkPlan = {
-      val partitioning = if (parentIsShuffle) None else eligible(node)
+    def rewrite(node: SparkPlan, parentIsExchange: Boolean): SparkPlan = {
+      val partitioning = if (parentIsExchange) None else eligible(node, general, scalar)
       val materialize =
         partitioning.nonEmpty && repeated.contains(materializedProject(node).canonicalized)
       val changed = node.withNewChildren(
-        node.children.map(rewrite(_, node.isInstanceOf[ShuffleExchangeLike])))
+        node.children.map(rewrite(_, node.isInstanceOf[Exchange])))
       if (materialize) {
         // This origin is not an explicit redundant repartition which
         // EnsureRequirements may eliminate on the next AQE replan.
