@@ -33,7 +33,11 @@ class VeloxConfig(conf: SQLConf) extends GlutenConfig(conf) {
 
   def aggregateIntersectKeysEnabled: Boolean = getConf(AGGREGATE_INTERSECT_KEYS_ENABLED)
 
+  def reuseScalarHavingKeysEnabled: Boolean = getConf(REUSE_SCALAR_HAVING_KEYS_ENABLED)
+
   def reuseFilteredFinalAggregateEnabled: Boolean = getConf(REUSE_FILTERED_FINAL_AGGREGATE_ENABLED)
+
+  def shareGroupedThresholdEnabled: Boolean = getConf(SHARE_GROUPED_THRESHOLD_ENABLED)
 
   def runtimeBloomCascadeEnabled: Boolean = getConf(RUNTIME_BLOOM_CASCADE_ENABLED)
   def runtimeBloomCascadeMaxCreationKeyBytes: Long =
@@ -46,6 +50,7 @@ class VeloxConfig(conf: SQLConf) extends GlutenConfig(conf) {
   def runtimeBloomSelectiveKeysMaxFilters: Int = getConf(RUNTIME_BLOOM_SELECTIVE_KEYS_MAX_FILTERS)
   def runtimeBloomSemiJoinEnabled: Boolean = getConf(RUNTIME_BLOOM_SEMI_JOIN_ENABLED)
   def runtimeBloomSemiJoinMaxFilters: Int = getConf(RUNTIME_BLOOM_SEMI_JOIN_MAX_FILTERS)
+  def factorGroupedJoinCounts: Boolean = getConf(FACTOR_GROUPED_JOIN_COUNTS)
   def dimensionBridgeEnabled: Boolean = getConf(DIMENSION_BRIDGE_ENABLED)
   def dimensionBridgeFactMinBytes: Long = getConf(DIMENSION_BRIDGE_FACT_MIN_BYTES)
   def dimensionBridgeDimensionMaxBytes: Long = getConf(DIMENSION_BRIDGE_DIMENSION_MAX_BYTES)
@@ -214,6 +219,13 @@ object VeloxConfig extends ConfigRegistry {
       .booleanConf
       .createWithDefault(true)
 
+  val REUSE_SCALAR_HAVING_KEYS_ENABLED =
+    buildConf("spark.gluten.sql.columnar.backend.velox.reuseScalarHavingKeys.enabled")
+      .doc("Share repeated grouping keys after an exact joined aggregate is " +
+        "filtered by a scalar MIN or MAX. Requires Spark exchange and subquery reuse.")
+      .booleanConf
+      .createWithDefault(true)
+
   val REUSE_FILTERED_FINAL_AGGREGATE_ENABLED =
     buildConf("spark.gluten.sql.columnar.backend.velox.reuseFilteredFinalAggregate.enabled")
       .doc("Materialize repeated deterministic key-only final aggregation and HAVING results for normal Spark exchange reuse. Preserves partitioning and uses ordinary shuffle budgets. A weak HAVING filter may add significant shuffle traffic; disabled by default.")
@@ -224,6 +236,12 @@ object VeloxConfig extends ConfigRegistry {
     buildConf("spark.gluten.sql.columnar.backend.velox.runtimeBloom.cascade.enabled")
       .doc("Build bounded extra runtime Bloom filters from dimensions already selected by stock runtime filters. Int/long inner join keys only; disabled by default.")
       .booleanConf.createWithDefault(false)
+  val SHARE_GROUPED_THRESHOLD_ENABLED =
+    buildConf("spark.gluten.sql.columnar.backend.velox.shareGroupedThreshold.enabled")
+      .doc("Share a grouped inner join between a filtered rollup and its scalar average threshold.")
+      .booleanConf
+      .createWithDefault(true)
+
   val RUNTIME_BLOOM_CASCADE_MAX_CREATION_KEY_BYTES =
     buildConf("spark.gluten.sql.columnar.backend.velox.runtimeBloom.cascade.maxCreationKeyBytes")
       .doc("Maximum estimated projected-key bytes for a cascading filter creation scan. Existing Spark Bloom state memory limits remain in force.")
@@ -261,6 +279,12 @@ object VeloxConfig extends ConfigRegistry {
       .intConf.checkValue(
         v => v >= 0 && v <= 10,
         "Must be between zero and ten").createWithDefault(2)
+  val FACTOR_GROUPED_JOIN_COUNTS =
+    buildConf("spark.gluten.sql.columnar.backend.velox.aggregation.factorJoinCounts.enabled")
+      .doc("Count groups separately on each side of an inner equijoin when the grouping includes the join key and attributes from both inputs.")
+      .booleanConf
+      .createWithDefault(true)
+
   val DIMENSION_BRIDGE_ENABLED =
     buildConf("spark.gluten.sql.columnar.backend.velox.joinReorder.dimensionBridge.enabled")
       .doc("Join two large inner-join inputs with their small bridging dimensions first when the dimensions are related by an extra equality, so that equality becomes part of the large join key. Disabled by default.")
