@@ -67,15 +67,17 @@ TYPED_TEST(FixedWidthGatherTest, preservesBitsAndPartitionBoundaries) {
     }
     for (uint32_t offset : {1, 2, 3, 4, 5}) {
       SCOPED_TRACE(offset);
-      std::vector<T> dst(size + offset + 1, kSentinel);
-      detail::gatherFixedWidth(src.data(), ids.data(), size, dst.data() + offset);
-      for (uint32_t row = 0; row < size; ++row) {
-        EXPECT_EQ(std::memcmp(&src[ids[row]], &dst[offset + row], sizeof(T)), 0);
+      for (bool packed : {false, true}) {
+        std::vector<T> dst(size + offset + 1, kSentinel);
+        detail::gatherFixedWidth(src.data(), ids.data(), size, dst.data() + offset, true, packed);
+        for (uint32_t row = 0; row < size; ++row) {
+          EXPECT_EQ(std::memcmp(&src[ids[row]], &dst[offset + row], sizeof(T)), 0);
+        }
+        for (uint32_t row = 0; row < offset; ++row) {
+          EXPECT_TRUE(dst[row] == kSentinel);
+        }
+        EXPECT_TRUE(dst.back() == kSentinel);
       }
-      for (uint32_t row = 0; row < offset; ++row) {
-        EXPECT_TRUE(dst[row] == kSentinel);
-      }
-      EXPECT_TRUE(dst.back() == kSentinel);
     }
   }
 }
@@ -167,9 +169,12 @@ TYPED_TEST(FixedWidthGatherTest, doesNotAccessPastBuffers) {
     for (uint32_t row = 0; row < size; ++row) {
       ids[row] = 127 - row;
     }
-    detail::gatherFixedWidth(src, ids, size, dst);
-    for (uint32_t row = 0; row < size; ++row) {
-      EXPECT_TRUE(dst[row] == src[ids[row]]);
+    for (bool packed : {false, true}) {
+      std::fill_n(dst, size, T{});
+      detail::gatherFixedWidth(src, ids, size, dst, true, packed);
+      for (uint32_t row = 0; row < size; ++row) {
+        EXPECT_TRUE(dst[row] == src[ids[row]]);
+      }
     }
   }
 }

@@ -24,7 +24,36 @@
 #include <arm_sve.h>
 #endif
 
+#if defined(__linux__) && defined(__aarch64__) && defined(__ARM_FEATURE_SVE) && defined(__AARCH64EL__)
+#include <asm/hwcap.h>
+#include <sys/auxv.h>
+#endif
+
 namespace gluten::detail {
+
+inline bool supportsPackedGather() {
+#if defined(__linux__) && defined(__aarch64__) && defined(__ARM_FEATURE_SVE) && defined(__AARCH64EL__)
+  static const bool isVera = [] {
+    if ((getauxval(AT_HWCAP) & (HWCAP_CPUID | HWCAP_SVE)) != (HWCAP_CPUID | HWCAP_SVE)) {
+      return false;
+    }
+    uint64_t midr;
+    asm("mrs %0, midr_el1" : "=r"(midr));
+    return (midr & 0xff00fff0) == 0x4e000100;
+  }();
+  return isVera && svcntb() == 16;
+#else
+  return false;
+#endif
+}
+
+#if defined(__ARM_FEATURE_SVE)
+// Each 128-bit vector holds two gathered values. Describe the full 32-byte
+// write to the compiler so adjacent partitions and unaligned appends are safe.
+inline void storeGatherPair(uint64_t* dst, svuint64_t first, svuint64_t second) {
+  asm("stp %q2, %q3, [%1]" : "=m"(*reinterpret_cast<unsigned char(*)[32]>(dst)) : "r"(dst), "w"(first), "w"(second));
+}
+#endif
 
 // Copy one partition's row selection to its contiguous value buffer. Source,
 // rowIds and destination must not overlap. Small selections and other widths
@@ -35,7 +64,8 @@ inline void gatherFixedWidth(
     const uint32_t* __restrict__ rowIds,
     uint32_t size,
     T* __restrict__ dst,
-    bool enableSveGather = true) {
+    bool enableSveGather = true,
+    [[maybe_unused]] bool packIndices = false) {
   uint32_t pos = 0;
 #if defined(__ARM_FEATURE_SVE)
   if constexpr (std::is_same_v<T, uint32_t> || std::is_same_v<T, uint64_t> || std::is_same_v<T, int64_t>) {
@@ -66,6 +96,19 @@ inline void gatherFixedWidth(
       } else {
         const auto all = svptrue_b64();
         const auto* data = reinterpret_cast<const uint64_t*>(src);
+        if (packIndices) {
+          const auto* packedEnd = rowIds + (size & ~uint32_t{7});
+          for (; indices < packedEnd; indices += 8, output += 8) {
+            const auto first = svld1_u32(svptrue_b32(), indices);
+            const auto second = svld1_u32(svptrue_b32(), indices + 4);
+            const auto a = svld1_gather_u64index_u64(all, data, svunpklo_u64(first));
+            const auto b = svld1_gather_u64index_u64(all, data, svunpkhi_u64(first));
+            const auto c = svld1_gather_u64index_u64(all, data, svunpklo_u64(second));
+            const auto d = svld1_gather_u64index_u64(all, data, svunpkhi_u64(second));
+            storeGatherPair(reinterpret_cast<uint64_t*>(output), a, b);
+            storeGatherPair(reinterpret_cast<uint64_t*>(output + 4), c, d);
+          }
+        }
         const auto* blockEnd = rowIds + (size & ~uint32_t{3});
         for (; indices < blockEnd; indices += 4, output += 4) {
           const auto indices0 = svld1uw_u64(all, indices);
